@@ -34,7 +34,6 @@ interface ReviewResult {
   total: number;
   mastered: number;
   knowledgePoints: string[];
-  remaining: number;
 }
 
 function formatDate(iso: string): string {
@@ -175,15 +174,16 @@ function ReviewComplete({
   total,
   mastered,
   knowledgePoints,
-  remaining,
   onClose,
 }: {
   total: number;
   mastered: number;
   knowledgePoints: string[];
-  remaining: number;
   onClose: () => void;
 }) {
+  const wrongQuestions = useExamStore((s) => s.wrongQuestions);
+  const remainingCount = wrongQuestions.filter(wq => !wq.mastered).length;
+
   return (
     <div className="fixed inset-0 bg-black/30 flex items-center justify-center z-50 p-4">
       <div className="bg-white rounded-2xl shadow-modal max-w-md w-full p-8 animate-slide-up">
@@ -218,9 +218,13 @@ function ReviewComplete({
             </div>
           )}
 
-          {remaining > 0 && (
+          {remainingCount > 0 ? (
             <p className="text-sm text-accent-coral mb-4">
-              还有 {remaining} 道错题待掌握
+              还有 {remainingCount} 道错题待掌握
+            </p>
+          ) : (
+            <p className="text-sm text-accent-success mb-4">
+              所有错题已全部掌握 🎉
             </p>
           )}
 
@@ -356,16 +360,13 @@ export default function WrongQuestions() {
     } else {
       const kps = new Set<string>();
       reviewQueue.forEach(item => {
-        if (item.wrongQuestionId !== currentItem.wrongQuestionId) {
-          kps.add(item.knowledgePoint);
-        }
+        kps.add(item.knowledgePoint);
       });
 
       setReviewResult({
         total: reviewQueue.length,
         mastered: newMasteredCount,
         knowledgePoints: Array.from(kps).sort(),
-        remaining: reviewQueue.length - newMasteredCount,
       });
     }
   };
@@ -383,7 +384,6 @@ export default function WrongQuestions() {
         total: reviewQueue.length,
         mastered: masteredCount,
         knowledgePoints: Array.from(kps).sort(),
-        remaining: reviewQueue.length - masteredCount,
       });
     }
   };
@@ -715,7 +715,6 @@ export default function WrongQuestions() {
           total={reviewResult.total}
           mastered={reviewResult.mastered}
           knowledgePoints={reviewResult.knowledgePoints}
-          remaining={reviewResult.remaining}
           onClose={handleCloseReview}
         />
       )}

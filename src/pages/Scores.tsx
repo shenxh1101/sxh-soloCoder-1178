@@ -15,6 +15,8 @@ import {
   Pie,
   Cell,
   Legend,
+  ComposedChart,
+  Line,
 } from 'recharts';
 import {
   PieChart as PieChartIcon,
@@ -36,6 +38,28 @@ const BAR_COLORS = {
   medium: '#c9a96e',
   bad: '#e07b5a',
 };
+
+interface ReviewPeriod {
+  label: string;
+  practiceCount: number;
+  correctCount: number;
+  wrongCount: number;
+  examCount: number;
+  rate: number;
+  knowledgePoints: string[];
+  startDate: string;
+  endDate: string;
+}
+
+function getWeekLabel(date: Date): string {
+  const monday = new Date(date);
+  monday.setDate(date.getDate() - date.getDay() + 1);
+  return `${monday.getFullYear()}-${String(monday.getMonth() + 1).padStart(2, '0')}-${String(monday.getDate()).padStart(2, '0')}`;
+}
+
+function getMonthLabel(date: Date): string {
+  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}`;
+}
 
 function formatDate(dateStr: string): string {
   return new Date(dateStr).toLocaleDateString('zh-CN', { month: 'short', day: 'numeric' });
@@ -75,6 +99,8 @@ export default function Scores() {
   const [annTitle, setAnnTitle] = useState('');
   const [annContent, setAnnContent] = useState('');
   const [expandedStudentId, setExpandedStudentId] = useState<string | null>(null);
+  const [reviewMode, setReviewMode] = useState<'week' | 'month'>('week');
+  const [expandedPeriod, setExpandedPeriod] = useState<string | null>(null);
 
   const { total, correct } = getPracticeRecordsCount();
   const correctRate = total > 0 ? Math.round((correct / total) * 100) : 0;
@@ -100,6 +126,81 @@ export default function Scores() {
       .map(([name, data]) => ({ name, rate: Math.round(data.rate), total: data.total, correct: data.correct }))
       .sort((a, b) => a.rate - b.rate);
   }, [kpRates]);
+
+  const reviewData = useMemo(() => {
+    if (!currentUser) return [];
+
+    const records = storage.getExerciseRecords(currentUser.id);
+    const exams = storage.getExamResults(currentUser.id);
+
+    const getLabel = reviewMode === 'week' ? getWeekLabel : getMonthLabel;
+
+    const groups = new Map<string, { practiceCount: number; correctCount: number; wrongCount: number; examCount: number; knowledgePoints: Set<string>; startDate: string; endDate: string; }>();
+
+    for (const record of records) {
+      const date = new Date(record.createdAt);
+      const label = getLabel(date);
+      if (!groups.has(label)) {
+        groups.set(label, { practiceCount: 0, correctCount: 0, wrongCount: 0, examCount: 0, knowledgePoints: new Set(), startDate: record.createdAt, endDate: record.createdAt });
+      }
+      const g = groups.get(label)!;
+      g.practiceCount++;
+      if (record.isCorrect) {
+        g.correctCount++;
+      } else {
+        g.wrongCount++;
+      }
+      const question = storage.getQuestionById(record.questionId);
+      if (question) {
+        g.knowledgePoints.add(question.knowledgePoint);
+      }
+      if (record.createdAt < g.startDate) g.startDate = record.createdAt;
+      if (record.createdAt > g.endDate) g.endDate = record.createdAt;
+    }
+
+    for (const exam of exams) {
+      const date = new Date(exam.createdAt);
+      const label = getLabel(date);
+      if (!groups.has(label)) {
+        groups.set(label, { practiceCount: 0, correctCount: 0, wrongCount: 0, examCount: 0, knowledgePoints: new Set(), startDate: exam.createdAt, endDate: exam.createdAt });
+      }
+      const g = groups.get(label)!;
+      g.examCount++;
+      if (exam.createdAt < g.startDate) g.startDate = exam.createdAt;
+      if (exam.createdAt > g.endDate) g.endDate = exam.createdAt;
+    }
+
+    const result: ReviewPeriod[] = [];
+    for (const [label, g] of groups) {
+      result.push({
+        label,
+        practiceCount: g.practiceCount,
+        correctCount: g.correctCount,
+        wrongCount: g.wrongCount,
+        examCount: g.examCount,
+        rate: g.practiceCount > 0 ? Math.round((g.correctCount / g.practiceCount) * 100) : 0,
+        knowledgePoints: Array.from(g.knowledgePoints),
+        startDate: g.startDate,
+        endDate: g.endDate,
+      });
+    }
+
+    result.sort((a, b) => a.label.localeCompare(b.label));
+    return result;
+  }, [currentUser, reviewMode]);
+
+  const chartData = useMemo(() => {
+    return reviewData.map((p) => ({
+      label: p.label,
+      rate: p.rate,
+      practiceCount: p.practiceCount,
+      wrongCount: p.wrongCount,
+    }));
+  }, [reviewData]);
+
+  const togglePeriod = (label: string) => {
+    setExpandedPeriod(expandedPeriod === label ? null : label);
+  };
 
   const students = useMemo(() => {
     return storage.getUsers().filter(u => u.id !== currentUser?.id);
@@ -317,6 +418,74 @@ export default function Scores() {
           </div>
         ) : (
           <p className="text-surface-ink-light text-center py-8">开始练习后，这里会显示各知识点正确率分析</p>
+        )}
+      </div>
+
+      <div className="card mb-6">
+        <h2 className="font-serif text-lg font-semibold text-surface-ink mb-4 flex items-center gap-2">
+          <TrendingUp className="w-5 h-5 text-primary-500" />
+          复盘视图
+        </h2>
+
+        <div className="flex gap-2 mb-4">
+          {(['week', 'month'] as const).map(mode => (
+            <button
+              key={mode}
+              onClick={() => setReviewMode(mode)}
+              className={cn(
+                'px-4 py-1.5 rounded-btn text-sm font-medium transition-all',
+                reviewMode === mode ? 'bg-primary-500 text-white' : 'bg-primary-50 text-primary-500 hover:bg-primary-100',
+              )}
+            >
+              {mode === 'week' ? '按周' : '按月'}
+            </button>
+          ))}
+        </div>
+
+        {chartData.length > 0 ? (
+          <>
+            <ResponsiveContainer width="100%" height={250}>
+              <ComposedChart data={chartData} margin={{ top: 5, right: 20, left: 0, bottom: 5 }}>
+                <CartesianGrid strokeDasharray="3 3" stroke="#e8e4df" />
+                <XAxis dataKey="label" tick={{ fontSize: 11, fill: '#6b7d8e' }} />
+                <YAxis yAxisId="left" tick={{ fontSize: 11, fill: '#6b7d8e' }} domain={[0, 100]} unit="%" />
+                <YAxis yAxisId="right" orientation="right" tick={{ fontSize: 11, fill: '#6b7d8e' }} />
+                <Tooltip contentStyle={{ borderRadius: '12px', border: '1px solid #e8e4df', fontSize: '13px' }} />
+                <Legend />
+                <Line yAxisId="left" type="monotone" dataKey="rate" stroke="#4caf7d" strokeWidth={2} name="正确率(%)" dot={{ r: 4 }} />
+                <Line yAxisId="right" type="monotone" dataKey="practiceCount" stroke="#1e3a5f" strokeWidth={2} name="做题数" dot={{ r: 4 }} />
+                <Line yAxisId="right" type="monotone" dataKey="wrongCount" stroke="#e07b5a" strokeWidth={2} name="错题数" dot={{ r: 4 }} />
+              </ComposedChart>
+            </ResponsiveContainer>
+
+            <div className="mt-4 space-y-2">
+              {reviewData.map((period, idx) => (
+                <div key={period.label}>
+                  <div
+                    onClick={() => togglePeriod(period.label)}
+                    className="flex justify-between items-center p-3 rounded-xl bg-primary-50/30 cursor-pointer hover:bg-primary-50 transition-colors"
+                  >
+                    <span className="text-sm font-medium text-surface-ink">{period.label}</span>
+                    <span className="text-xs text-surface-ink-light">
+                      练习{period.practiceCount}题 | 正确率{period.rate}% | 错题{period.wrongCount}
+                    </span>
+                  </div>
+                  {expandedPeriod === period.label && (
+                    <div className="mt-2 p-3 bg-primary-50/50 rounded-xl">
+                      <p className="text-sm font-medium mb-2">涉及知识点：</p>
+                      <div className="flex flex-wrap gap-1.5">
+                        {period.knowledgePoints.map(kp => (
+                          <span key={kp} className="badge-primary">{kp}</span>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                </div>
+              ))}
+            </div>
+          </>
+        ) : (
+          <p className="text-surface-ink-light text-center py-8">暂无练习记录，开始刷题后会显示复盘分析</p>
         )}
       </div>
 
@@ -574,6 +743,102 @@ export default function Scores() {
                                       );
                                     })()}
                                   </div>
+                                </div>
+                                <div className="card mt-4">
+                                  <h4 className="font-serif font-semibold text-primary-500 mb-3">本周 vs 上周</h4>
+                                  {(() => {
+                                    const now = new Date();
+                                    const thisWeekStart = new Date(now);
+                                    thisWeekStart.setDate(now.getDate() - now.getDay() + 1);
+                                    thisWeekStart.setHours(0, 0, 0, 0);
+                                    const thisWeekEnd = now;
+
+                                    const lastWeekStart = new Date(thisWeekStart);
+                                    lastWeekStart.setDate(lastWeekStart.getDate() - 7);
+                                    const lastWeekEnd = new Date(thisWeekStart);
+                                    lastWeekEnd.setDate(lastWeekEnd.getDate() - 1);
+
+                                    const filterByRange = (records: any[], start: Date, end: Date) => {
+                                      return records.filter(r => {
+                                        const d = new Date(r.createdAt || r.checkDate);
+                                        return d >= start && d <= end;
+                                      });
+                                    };
+
+                                    const thisWeekRecords = filterByRange(detail.records, thisWeekStart, thisWeekEnd);
+                                    const lastWeekRecords = filterByRange(detail.records, lastWeekStart, lastWeekEnd);
+
+                                    const thisWeekRate = thisWeekRecords.length > 0
+                                      ? Math.round((thisWeekRecords.filter(r => r.isCorrect).length / thisWeekRecords.length) * 100)
+                                      : null;
+                                    const lastWeekRate = lastWeekRecords.length > 0
+                                      ? Math.round((lastWeekRecords.filter(r => r.isCorrect).length / lastWeekRecords.length) * 100)
+                                      : null;
+
+                                    const thisWeekWrong = storage.getWrongQuestions(s.id).length;
+
+                                    const thisWeekCheckIns = filterByRange(detail.checkIns, thisWeekStart, thisWeekEnd);
+                                    const lastWeekCheckIns = filterByRange(detail.checkIns, lastWeekStart, lastWeekEnd);
+
+                                    const thisWeekProgress = storage.getStudyProgress(s.id).filter(p => {
+                                      const d = new Date(p.completedAt);
+                                      return d >= thisWeekStart && d <= thisWeekEnd;
+                                    }).length;
+                                    const lastWeekProgress = storage.getStudyProgress(s.id).filter(p => {
+                                      const d = new Date(p.completedAt);
+                                      return d >= lastWeekStart && d <= lastWeekEnd;
+                                    }).length;
+
+                                    return (
+                                      <div className="space-y-3">
+                                        <div className="flex justify-between items-center">
+                                          <span className="text-sm text-surface-ink-light">做题正确率</span>
+                                          <div className="flex items-center gap-2">
+                                            {lastWeekRate !== null && (
+                                              <span className="text-sm text-surface-ink-light">{lastWeekRate}%</span>
+                                            )}
+                                            {lastWeekRate !== null && thisWeekRate !== null && (
+                                              <span className="text-xs">
+                                                {thisWeekRate > lastWeekRate ? '↑' : thisWeekRate < lastWeekRate ? '↓' : '→'}
+                                              </span>
+                                            )}
+                                            <span className={cn(
+                                              'font-mono font-bold',
+                                              thisWeekRate !== null && thisWeekRate >= 80
+                                                ? 'text-accent-success'
+                                                : thisWeekRate !== null && thisWeekRate >= 60
+                                                  ? 'text-accent-gold'
+                                                  : 'text-accent-coral',
+                                            )}>
+                                              {thisWeekRate !== null ? `${thisWeekRate}%` : '-'}
+                                            </span>
+                                          </div>
+                                        </div>
+                                        <div className="flex justify-between items-center">
+                                          <span className="text-sm text-surface-ink-light">完成章节</span>
+                                          <div className="flex items-center gap-2">
+                                            {lastWeekProgress > 0 && (
+                                              <span className="text-sm text-surface-ink-light">{lastWeekProgress}章</span>
+                                            )}
+                                            <span className="font-mono font-bold text-primary-500">{thisWeekProgress}章</span>
+                                          </div>
+                                        </div>
+                                        <div className="flex justify-between items-center">
+                                          <span className="text-sm text-surface-ink-light">当前错题</span>
+                                          <span className="font-mono font-bold text-accent-coral">{thisWeekWrong}题</span>
+                                        </div>
+                                        <div className="flex justify-between items-center">
+                                          <span className="text-sm text-surface-ink-light">本周打卡</span>
+                                          <span className={cn(
+                                            'font-mono font-bold',
+                                            thisWeekCheckIns.length >= 3 ? 'text-accent-success' : 'text-accent-gold',
+                                          )}>
+                                            {thisWeekCheckIns.length}天
+                                          </span>
+                                        </div>
+                                      </div>
+                                    );
+                                  })()}
                                 </div>
                               </div>
                             )}

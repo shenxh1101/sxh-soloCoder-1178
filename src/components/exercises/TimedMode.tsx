@@ -114,6 +114,11 @@ export default function TimedMode() {
     saveExerciseRecord(currentQuestion.id, correct, 'timed');
 
     if (currentIndex === questions.length - 1) {
+      const updatedAnswers = {
+        ...answers,
+        [currentQuestion.id]: { selected: current.selected, submitted: true, isCorrect: correct, showExplanation: false },
+      };
+      answersRef.current = updatedAnswers;
       handleSubmitExam();
     }
   };

@@ -7,11 +7,9 @@ import {
   Target,
   BookOpen,
   CheckCircle2,
-  Clock,
   Edit3,
   AlertTriangle,
   CheckCheck,
-  ChevronRight,
 } from 'lucide-react';
 
 function getDaysUntil(targetDate: string): number {
@@ -47,7 +45,7 @@ function UrgencyBadge({ urgency }: { urgency: 'high' | 'medium' | 'low' }) {
 
 export default function StudyPlan() {
   const studyPlan = useExamStore((s) => s.studyPlan);
-  const dailyTasks = useExamStore((s) => s.dailyTasks);
+  const weeklyTasks = useExamStore((s) => s.weeklyTasks);
   const courses = useExamStore((s) => s.courses);
   const chapters = useExamStore((s) => s.chapters);
   const studyProgress = useExamStore((s) => s.studyProgress);
@@ -62,12 +60,14 @@ export default function StudyPlan() {
   const [targetScore, setTargetScore] = useState(studyPlan?.targetScore || 60);
   const [dailyTaskCount, setDailyTaskCount] = useState(studyPlan?.dailyTaskCount || 5);
   const [checkedIn, setCheckedIn] = useState(hasCheckedInToday());
+  const [selectedDay, setSelectedDay] = useState(new Date().toISOString().split('T')[0]);
 
   const daysRemaining = studyPlan ? getDaysUntil(studyPlan.targetDate) : 0;
   const continuousDays = getContinuousCheckInDays();
 
-  const allTasksCompleted = dailyTasks.length > 0 && dailyTasks.every((t) => t.completed);
-  const completedCount = dailyTasks.filter((t) => t.completed).length;
+  const currentTasks = useMemo(() => weeklyTasks[selectedDay] || [], [weeklyTasks, selectedDay]);
+  const completedCount = currentTasks.filter((t) => t.completed).length;
+  const todayStr = new Date().toISOString().split('T')[0];
 
   const handleGeneratePlan = () => {
     if (!targetDate || !targetScore) return;
@@ -92,16 +92,15 @@ export default function StudyPlan() {
   }, [continuousDays]);
 
   const todayDate = new Date();
-  const todayStr = todayDate.toISOString().split('T')[0];
 
   const reviewTasks = useMemo(() => {
-    return dailyTasks
+    return currentTasks
       .filter((t) => t.type === 'review' || t.type === 'exercise')
       .sort((a, b) => {
         const order = { high: 0, medium: 1, low: 2 };
         return order[a.urgency] - order[b.urgency];
       });
-  }, [dailyTasks]);
+  }, [currentTasks]);
 
   const currentYear = todayDate.getFullYear();
   const currentMonth = todayDate.getMonth();
@@ -222,15 +221,53 @@ export default function StudyPlan() {
             <div className="flex items-center justify-between mb-4">
               <h2 className="font-serif text-lg font-semibold text-surface-ink flex items-center gap-2">
                 <BookOpen className="w-5 h-5 text-primary-500" />
-                今日学习任务
+                学习任务
                 <span className="text-sm font-normal text-surface-ink-light">
-                  ({completedCount}/{dailyTasks.length})
+                  ({completedCount}/{currentTasks.length})
                 </span>
               </h2>
             </div>
 
+            <div className="flex gap-1 mb-4 overflow-x-auto">
+              {(() => {
+                const weekStart = new Date();
+                weekStart.setDate(weekStart.getDate() - weekStart.getDay() + 1);
+                weekStart.setHours(0, 0, 0, 0);
+                return Array.from({ length: 7 }, (_, i) => {
+                  const date = new Date(weekStart);
+                  date.setDate(weekStart.getDate() + i);
+                  const dateStr = date.toISOString().split('T')[0];
+                  const isToday = dateStr === todayStr;
+                  const dayTasks = weeklyTasks[dateStr] || [];
+                  const dayCompleted = dayTasks.filter(t => t.completed).length;
+                  const dayTotal = dayTasks.length;
+                  const allDone = dayTotal > 0 && dayCompleted === dayTotal;
+
+                  return (
+                    <button
+                      key={dateStr}
+                      onClick={() => setSelectedDay(dateStr)}
+                      className={cn(
+                        'flex flex-col items-center px-3 py-2 rounded-btn text-xs transition-all shrink-0',
+                        selectedDay === dateStr ? 'bg-primary-500 text-white' :
+                        allDone ? 'bg-green-50 text-accent-success' :
+                        isToday ? 'bg-primary-50 text-primary-500 font-semibold' :
+                        'bg-surface-paper text-surface-ink-light hover:bg-primary-50',
+                      )}
+                    >
+                      <span>{['一','二','三','四','五','六','日'][i]}</span>
+                      <span className="font-mono text-sm font-bold">{date.getDate()}</span>
+                      {dayTotal > 0 && (
+                        <span className="text-xs">{dayCompleted}/{dayTotal}</span>
+                      )}
+                    </button>
+                  );
+                });
+              })()}
+            </div>
+
             <div className="space-y-2">
-              {dailyTasks.map((task) => (
+              {currentTasks.map((task) => (
                 <label
                   key={task.id}
                   className={cn(
@@ -256,31 +293,33 @@ export default function StudyPlan() {
                   )}
                 </label>
               ))}
-              {dailyTasks.length === 0 && (
+              {currentTasks.length === 0 && (
                 <p className="text-surface-ink-light text-center py-6">
                   {studyPlan
-                    ? '任务生成出现问题，请尝试修改学习计划'
+                    ? '暂无任务安排'
                     : '请先生成学习计划，系统将为您自动安排每日任务'}
                 </p>
               )}
             </div>
 
-            <div className="mt-4 pt-4 border-t border-surface-border">
-              {checkedIn ? (
-                <button disabled className="btn-primary w-full bg-accent-success hover:bg-accent-success flex items-center justify-center gap-2 opacity-80">
-                  <CheckCheck className="w-5 h-5" />
-                  今日已打卡 ✓
-                </button>
-              ) : (
-                <button
-                  onClick={handleCheckIn}
-                  className="btn-primary w-full flex items-center justify-center gap-2"
-                >
-                  <Calendar className="w-5 h-5" />
-                  今日打卡
-                </button>
-              )}
-            </div>
+            {selectedDay === todayStr && (
+              <div className="mt-4 pt-4 border-t border-surface-border">
+                {checkedIn ? (
+                  <button disabled className="btn-primary w-full bg-accent-success hover:bg-accent-success flex items-center justify-center gap-2 opacity-80">
+                    <CheckCheck className="w-5 h-5" />
+                    今日已打卡 ✓
+                  </button>
+                ) : (
+                  <button
+                    onClick={handleCheckIn}
+                    className="btn-primary w-full flex items-center justify-center gap-2"
+                  >
+                    <Calendar className="w-5 h-5" />
+                    今日打卡
+                  </button>
+                )}
+              </div>
+            )}
           </div>
 
           <div className="card">

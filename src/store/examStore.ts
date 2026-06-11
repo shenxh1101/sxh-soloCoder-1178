@@ -28,6 +28,7 @@ interface ExamStore {
   announcements: Announcement[];
   favoriteQuestionIds: string[];
   dailyTasks: DailyTask[];
+  weeklyTasks: Record<string, DailyTask[]>;
 
   init: () => void;
   login: (email: string) => User | null;
@@ -60,6 +61,7 @@ interface ExamStore {
 
   saveStudyPlan: (targetDate: string, targetScore: number, dailyTaskCount: number) => void;
   generateDailyTasks: () => DailyTask[];
+  generateWeeklyTasks: () => void;
   ensureDailyTasksGenerated: () => void;
   toggleTaskCompleted: (taskId: string) => void;
   saveDailyCheckIn: () => void;
@@ -84,6 +86,7 @@ export const useExamStore = create<ExamStore>((set, get) => ({
   announcements: [],
   favoriteQuestionIds: [],
   dailyTasks: [],
+  weeklyTasks: {},
 
   init: () => {
     storage.initStorageIfEmpty();
@@ -98,6 +101,21 @@ export const useExamStore = create<ExamStore>((set, get) => ({
     if (user) {
       const today = new Date().toISOString().split('T')[0];
       const savedTasks = storage.getDailyTasks(user.id, today);
+      const weekStart = new Date();
+      weekStart.setDate(weekStart.getDate() - weekStart.getDay() + 1);
+      weekStart.setHours(0, 0, 0, 0);
+
+      const weekly: Record<string, DailyTask[]> = {};
+      for (let d = 0; d < 7; d++) {
+        const date = new Date(weekStart);
+        date.setDate(weekStart.getDate() + d);
+        const dateStr = date.toISOString().split('T')[0];
+        const tasks = storage.getDailyTasks(user.id, dateStr);
+        if (tasks) {
+          weekly[dateStr] = tasks;
+        }
+      }
+
       set({
         wrongQuestions: storage.getWrongQuestions(user.id),
         studyProgress: storage.getStudyProgress(user.id),
@@ -105,8 +123,16 @@ export const useExamStore = create<ExamStore>((set, get) => ({
         checkIns: storage.getCheckIns(user.id),
         favoriteQuestionIds: storage.getFavoriteQuestions(user.id).map(f => f.questionId),
         dailyTasks: savedTasks || [],
+        weeklyTasks: weekly,
       });
-      if (!savedTasks || savedTasks.length === 0) {
+
+      const hasAnyWeeklyTask = Object.values(weekly).some(arr => arr.length > 0);
+      if (!hasAnyWeeklyTask) {
+        const plan = storage.getStudyPlan(user.id);
+        if (plan) {
+          get().generateWeeklyTasks();
+        }
+      } else if (!savedTasks || savedTasks.length === 0) {
         const plan = storage.getStudyPlan(user.id);
         if (plan) {
           const tasks = get().generateDailyTasks();
@@ -123,6 +149,21 @@ export const useExamStore = create<ExamStore>((set, get) => ({
       storage.setCurrentUser(user);
       const today = new Date().toISOString().split('T')[0];
       const savedTasks = storage.getDailyTasks(user.id, today);
+      const weekStart = new Date();
+      weekStart.setDate(weekStart.getDate() - weekStart.getDay() + 1);
+      weekStart.setHours(0, 0, 0, 0);
+
+      const weekly: Record<string, DailyTask[]> = {};
+      for (let d = 0; d < 7; d++) {
+        const date = new Date(weekStart);
+        date.setDate(weekStart.getDate() + d);
+        const dateStr = date.toISOString().split('T')[0];
+        const tasks = storage.getDailyTasks(user.id, dateStr);
+        if (tasks) {
+          weekly[dateStr] = tasks;
+        }
+      }
+
       set({
         currentUser: user,
         wrongQuestions: storage.getWrongQuestions(user.id),
@@ -132,7 +173,22 @@ export const useExamStore = create<ExamStore>((set, get) => ({
         favoriteQuestionIds: storage.getFavoriteQuestions(user.id).map(f => f.questionId),
         announcements: storage.getAnnouncements(),
         dailyTasks: savedTasks || [],
+        weeklyTasks: weekly,
       });
+
+      const hasAnyWeeklyTask = Object.values(weekly).some(arr => arr.length > 0);
+      if (!hasAnyWeeklyTask) {
+        const plan = storage.getStudyPlan(user.id);
+        if (plan) {
+          get().generateWeeklyTasks();
+        }
+      } else if (!savedTasks || savedTasks.length === 0) {
+        const plan = storage.getStudyPlan(user.id);
+        if (plan) {
+          const tasks = get().generateDailyTasks();
+          set({ dailyTasks: tasks });
+        }
+      }
       return user;
     }
     return null;
@@ -148,6 +204,7 @@ export const useExamStore = create<ExamStore>((set, get) => ({
       checkIns: [],
       favoriteQuestionIds: [],
       dailyTasks: [],
+      weeklyTasks: {},
     });
   },
 
@@ -414,17 +471,22 @@ export const useExamStore = create<ExamStore>((set, get) => ({
 
     storage.saveStudyPlan(plan);
     set({ studyPlan: plan });
-    get().ensureDailyTasksGenerated();
+    get().generateWeeklyTasks();
+    const todayStr = new Date().toISOString().split('T')[0];
+    set({ dailyTasks: get().weeklyTasks[todayStr] || [] });
   },
 
   ensureDailyTasksGenerated: () => {
-    const { currentUser, dailyTasks, studyPlan } = get();
+    const { currentUser, weeklyTasks, studyPlan } = get();
     if (!currentUser || !studyPlan) return;
+    const hasAnyWeeklyTask = Object.values(weeklyTasks).some(arr => arr.length > 0);
+    if (!hasAnyWeeklyTask) {
+      get().generateWeeklyTasks();
+    }
     const today = new Date().toISOString().split('T')[0];
-    const savedTasks = storage.getDailyTasks(currentUser.id, today);
-    if (!savedTasks || savedTasks.length === 0) {
-      const tasks = get().generateDailyTasks();
-      set({ dailyTasks: tasks });
+    if (!weeklyTasks[today] || weeklyTasks[today].length === 0) {
+      const todayStr = new Date().toISOString().split('T')[0];
+      set({ dailyTasks: get().weeklyTasks[todayStr] || [] });
     }
   },
 
@@ -529,8 +591,138 @@ export const useExamStore = create<ExamStore>((set, get) => ({
     return selectedTasks;
   },
 
+  generateWeeklyTasks: () => {
+    const { currentUser, chapters, studyProgress, courses, studyPlan } = get();
+    if (!currentUser || !studyPlan) return;
+
+    const weekStart = new Date();
+    weekStart.setDate(weekStart.getDate() - weekStart.getDay() + 1);
+    weekStart.setHours(0, 0, 0, 0);
+
+    const allTasks: Record<string, DailyTask[]> = {};
+
+    const kpRates = get().getCorrectRateByKnowledgePoint();
+    const weakKp: { kp: string; rate: number }[] = [];
+    Object.entries(kpRates).forEach(([kp, data]) => {
+      if (data.rate < 70) weakKp.push({ kp, rate: data.rate });
+    });
+    weakKp.sort((a, b) => a.rate - b.rate);
+
+    for (let day = 0; day < 7; day++) {
+      const date = new Date(weekStart);
+      date.setDate(weekStart.getDate() + day);
+      const dateStr = date.toISOString().split('T')[0];
+
+      const saved = storage.getDailyTasks(currentUser.id, dateStr);
+      if (saved && saved.length > 0) {
+        allTasks[dateStr] = saved;
+        continue;
+      }
+
+      const tasks: DailyTask[] = [];
+      let taskId = 1;
+
+      if (day === 0) {
+        const lastWeekTasks: DailyTask[] = [];
+        for (let d = 1; d <= 7; d++) {
+          const prev = new Date(weekStart);
+          prev.setDate(prev.getDate() - d);
+          const s = storage.getDailyTasks(currentUser.id, prev.toISOString().split('T')[0]);
+          if (s) {
+            s.forEach(t => {
+              if (!t.completed) lastWeekTasks.push(t);
+            });
+          }
+        }
+        lastWeekTasks.forEach(yt => {
+          tasks.push({
+            id: `task-${taskId++}`,
+            chapterId: yt.chapterId,
+            chapterTitle: yt.chapterTitle,
+            courseTitle: yt.courseTitle,
+            type: yt.type,
+            completed: false,
+            urgency: 'high',
+          });
+        });
+      } else {
+        const prevDate = new Date(weekStart);
+        prevDate.setDate(prevDate.getDate() + day - 1);
+        const prevDateStr = prevDate.toISOString().split('T')[0];
+        const prevAll = allTasks[prevDateStr] || [];
+        prevAll.forEach(pt => {
+          if (!pt.completed) {
+            tasks.push({
+              ...pt,
+              id: `task-${taskId++}`,
+              urgency: 'high',
+            });
+          }
+        });
+      }
+
+      const daysUntilExam = Math.ceil((new Date(studyPlan.targetDate).getTime() - date.getTime()) / (1000 * 60 * 60 * 24));
+      const adjustedCount = daysUntilExam <= 14
+        ? Math.min(studyPlan.dailyTaskCount + 2, 15)
+        : studyPlan.dailyTaskCount;
+
+      const newTasksNeeded = adjustedCount - tasks.length;
+      if (newTasksNeeded > 0) {
+        courses.forEach(course => {
+          const courseChapters = chapters.filter(c => c.courseId === course.id).sort((a, b) => a.order - b.order);
+          courseChapters.forEach(chapter => {
+            if (tasks.length >= adjustedCount) return;
+            const taskExists = tasks.some(t => t.chapterId === chapter.id && t.type === 'study');
+            if (taskExists) return;
+            const isCompleted = studyProgress.some(sp => sp.chapterId === chapter.id && sp.completed);
+            if (!isCompleted) {
+              tasks.push({
+                id: `task-${taskId++}`,
+                chapterId: chapter.id,
+                chapterTitle: chapter.title,
+                courseTitle: course.title,
+                type: 'study',
+                completed: false,
+                urgency: 'medium',
+              });
+            }
+          });
+        });
+      }
+
+      weakKp.forEach(({ kp, rate }) => {
+        if (tasks.length >= adjustedCount) return;
+        const relatedQ = get().questions.find(q => q.knowledgePoint === kp);
+        if (relatedQ) {
+          const ch = get().chapters.find(c => c.id === relatedQ.chapterId);
+          if (ch && !tasks.some(t => t.chapterId === ch.id && t.type !== 'study')) {
+            tasks.push({
+              id: `task-${taskId++}`,
+              chapterId: ch.id,
+              chapterTitle: ch.title,
+              courseTitle: courses.find(c => c.id === ch.courseId)?.title || '',
+              type: 'exercise',
+              completed: false,
+              urgency: rate < 40 ? 'high' : 'medium',
+            });
+          }
+        }
+      });
+
+      tasks.sort((a, b) => {
+        const order = { high: 0, medium: 1, low: 2 } as Record<string, number>;
+        return order[a.urgency] - order[b.urgency];
+      });
+
+      storage.saveDailyTasks(currentUser.id, dateStr, tasks);
+      allTasks[dateStr] = tasks;
+    }
+
+    set({ weeklyTasks: allTasks });
+  },
+
   toggleTaskCompleted: (taskId: string) => {
-    const { dailyTasks, currentUser } = get();
+    const { dailyTasks, currentUser, weeklyTasks } = get();
     const newTasks = dailyTasks.map(task =>
       task.id === taskId ? { ...task, completed: !task.completed } : task
     );
@@ -538,6 +730,7 @@ export const useExamStore = create<ExamStore>((set, get) => ({
     if (currentUser) {
       const today = new Date().toISOString().split('T')[0];
       storage.saveDailyTasks(currentUser.id, today, newTasks);
+      set({ weeklyTasks: { ...weeklyTasks, [today]: newTasks } });
     }
   },
 
