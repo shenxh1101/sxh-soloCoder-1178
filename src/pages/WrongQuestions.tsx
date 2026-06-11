@@ -18,6 +18,25 @@ import {
   RotateCw,
 } from 'lucide-react';
 
+interface ReviewItem {
+  wrongQuestionId: string;
+  questionId: string;
+  content: string;
+  options: string[];
+  type: string;
+  answer: string;
+  explanation: string;
+  knowledgePoint: string;
+  difficulty: string;
+}
+
+interface ReviewResult {
+  total: number;
+  mastered: number;
+  knowledgePoints: string[];
+  remaining: number;
+}
+
 function formatDate(iso: string): string {
   const d = new Date(iso);
   const now = new Date();
@@ -155,38 +174,60 @@ function QuestionRedo({
 function ReviewComplete({
   total,
   mastered,
+  knowledgePoints,
+  remaining,
   onClose,
 }: {
   total: number;
   mastered: number;
+  knowledgePoints: string[];
+  remaining: number;
   onClose: () => void;
 }) {
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-surface-ink/40 backdrop-blur-sm animate-fade-in">
-      <div className="relative bg-surface-card rounded-2xl shadow-modal max-w-md w-full mx-4 p-8 text-center">
-        <CheckCircle2 className="w-16 h-16 text-accent-success mx-auto mb-4" />
-        <h2 className="font-serif text-xl font-bold text-primary-500 mb-2">复习完成</h2>
-        <p className="text-surface-ink-light mb-6">
-          本次复习 <span className="font-bold text-primary-500">{total}</span> 题，
-          掌握 <span className="font-bold text-accent-success">{mastered}</span> 题
-        </p>
-        <div className="flex items-center justify-center gap-4 mb-6">
-          <div className="text-center">
-            <div className="w-16 h-16 rounded-full border-4 border-accent-success flex items-center justify-center mx-auto mb-2">
-              <span className="text-lg font-bold text-accent-success font-mono">{mastered}</span>
+    <div className="fixed inset-0 bg-black/30 flex items-center justify-center z-50 p-4">
+      <div className="bg-white rounded-2xl shadow-modal max-w-md w-full p-8 animate-slide-up">
+        <div className="text-center">
+          <div className="relative w-24 h-24 mx-auto mb-4">
+            <svg className="w-24 h-24 -rotate-90" viewBox="0 0 100 100">
+              <circle cx="50" cy="50" r="42" fill="none" stroke="#e8e4df" strokeWidth="8" />
+              <circle cx="50" cy="50" r="42" fill="none" stroke="#4caf7d" strokeWidth="8"
+                strokeDasharray={`${Math.round((mastered / total) * 264)} 264`}
+                strokeLinecap="round" />
+            </svg>
+            <div className="absolute inset-0 flex items-center justify-center">
+              <span className="font-mono text-xl font-bold text-accent-success">
+                {mastered}/{total}
+              </span>
             </div>
-            <span className="text-xs text-surface-ink-light">已掌握</span>
           </div>
-          <div className="text-center">
-            <div className="w-16 h-16 rounded-full border-4 border-accent-coral flex items-center justify-center mx-auto mb-2">
-              <span className="text-lg font-bold text-accent-coral font-mono">{total - mastered}</span>
+
+          <h3 className="font-serif text-xl font-bold text-primary-500 mb-2">复习完成</h3>
+          <p className="text-surface-ink-light mb-4">
+            本次复习 {total} 题，掌握 {mastered} 题
+          </p>
+
+          {knowledgePoints.length > 0 && (
+            <div className="mb-4">
+              <p className="text-sm text-surface-ink-light mb-2">涉及知识点：</p>
+              <div className="flex flex-wrap gap-1.5 justify-center">
+                {knowledgePoints.map(kp => (
+                  <span key={kp} className="badge-primary">{kp}</span>
+                ))}
+              </div>
             </div>
-            <span className="text-xs text-surface-ink-light">未掌握</span>
-          </div>
+          )}
+
+          {remaining > 0 && (
+            <p className="text-sm text-accent-coral mb-4">
+              还有 {remaining} 道错题待掌握
+            </p>
+          )}
+
+          <button onClick={onClose} className="btn-primary w-full">
+            返回错题本
+          </button>
         </div>
-        <button onClick={onClose} className="btn-primary w-full">
-          返回错题本
-        </button>
       </div>
     </div>
   );
@@ -211,8 +252,9 @@ export default function WrongQuestions() {
 
   const [reviewMode, setReviewMode] = useState(false);
   const [reviewIndex, setReviewIndex] = useState(0);
-  const [reviewMastered, setReviewMastered] = useState(0);
-  const [showReviewStats, setShowReviewStats] = useState(false);
+  const [reviewQueue, setReviewQueue] = useState<ReviewItem[]>([]);
+  const [masteredCount, setMasteredCount] = useState(0);
+  const [reviewResult, setReviewResult] = useState<ReviewResult | null>(null);
 
   const allKps = useMemo(() => getAllKnowledgePoints(), [getAllKnowledgePoints]);
 
@@ -247,13 +289,6 @@ export default function WrongQuestions() {
     }));
   }, [favoriteQuestions, currentUser]);
 
-  const reviewQueue = useMemo(() => {
-    return wrongQuestions
-      .filter(wq => !wq.mastered)
-      .map(wq => ({ wq, q: questions.find(q => q.id === wq.questionId) }))
-      .filter((item): item is { wq: WrongQuestion; q: Question } => !!item.q);
-  }, [wrongQuestions, questions]);
-
   useEffect(() => {
     const init: Record<string, string> = {};
     wrongQuestions.forEach((wq) => {
@@ -277,41 +312,88 @@ export default function WrongQuestions() {
 
   const getQuestionById = (id: string) => questions.find((q) => q.id === id);
 
+  const unmasteredWrongQuestions = useMemo(
+    () => wrongQuestions.filter(wq => !wq.mastered),
+    [wrongQuestions],
+  );
+
   const handleStartReview = () => {
-    if (reviewQueue.length === 0) return;
-    setReviewMode(true);
+    const currentWrong = wrongQuestions.filter(wq => !wq.mastered);
+    if (currentWrong.length === 0) return;
+
+    const queue: ReviewItem[] = currentWrong.map(wq => {
+      const q = questions.find(q => q.id === wq.questionId);
+      return {
+        wrongQuestionId: wq.id,
+        questionId: wq.questionId,
+        content: q?.content || '',
+        options: q?.options || [],
+        type: q?.type || 'single',
+        answer: q?.answer || '',
+        explanation: q?.explanation || '',
+        knowledgePoint: q?.knowledgePoint || '',
+        difficulty: q?.difficulty || 'medium',
+      };
+    });
+
+    setReviewQueue(queue);
     setReviewIndex(0);
-    setReviewMastered(0);
-    setShowReviewStats(false);
+    setReviewMode(true);
+    setMasteredCount(0);
+    setReviewResult(null);
   };
 
   const handleReviewMastered = () => {
-    const current = reviewQueue[reviewIndex];
-    if (current) {
-      markAsMastered(current.wq.id);
-    }
-    const nextMastered = reviewMastered + 1;
-    setReviewMastered(nextMastered);
-    if (reviewIndex + 1 >= reviewQueue.length) {
-      setShowReviewStats(true);
+    const currentItem = reviewQueue[reviewIndex];
+    if (!currentItem) return;
+
+    markAsMastered(currentItem.wrongQuestionId);
+    const newMasteredCount = masteredCount + 1;
+    setMasteredCount(newMasteredCount);
+
+    if (reviewIndex + 1 < reviewQueue.length) {
+      setTimeout(() => setReviewIndex(prev => prev + 1), 600);
     } else {
-      setReviewIndex(reviewIndex + 1);
+      const kps = new Set<string>();
+      reviewQueue.forEach(item => {
+        if (item.wrongQuestionId !== currentItem.wrongQuestionId) {
+          kps.add(item.knowledgePoint);
+        }
+      });
+
+      setReviewResult({
+        total: reviewQueue.length,
+        mastered: newMasteredCount,
+        knowledgePoints: Array.from(kps).sort(),
+        remaining: reviewQueue.length - newMasteredCount,
+      });
     }
   };
 
-  const handleReviewWrong = () => {
-    if (reviewIndex + 1 >= reviewQueue.length) {
-      setShowReviewStats(true);
+  const handleReviewContinue = () => {
+    if (reviewIndex + 1 < reviewQueue.length) {
+      setReviewIndex(prev => prev + 1);
     } else {
-      setReviewIndex(reviewIndex + 1);
+      const kps = new Set<string>();
+      reviewQueue.forEach(item => {
+        kps.add(item.knowledgePoint);
+      });
+
+      setReviewResult({
+        total: reviewQueue.length,
+        mastered: masteredCount,
+        knowledgePoints: Array.from(kps).sort(),
+        remaining: reviewQueue.length - masteredCount,
+      });
     }
   };
 
   const handleCloseReview = () => {
     setReviewMode(false);
-    setShowReviewStats(false);
+    setReviewResult(null);
     setReviewIndex(0);
-    setReviewMastered(0);
+    setMasteredCount(0);
+    setReviewQueue([]);
   };
 
   const currentReviewItem = reviewQueue[reviewIndex];
@@ -319,7 +401,7 @@ export default function WrongQuestions() {
   const redoQuestion = redoId ? getQuestionById(redoId) : null;
   const redoWq = redoId ? wrongQuestions.find((w) => w.questionId === redoId) : null;
 
-  const unmasteredCount = wrongQuestions.filter(wq => !wq.mastered).length;
+  const unmasteredCount = unmasteredWrongQuestions.length;
 
   return (
     <div className="animate-fade-in">
@@ -602,22 +684,38 @@ export default function WrongQuestions() {
         );
       })()}
 
-      {reviewMode && !showReviewStats && currentReviewItem && (
-        <QuestionRedo
-          key={`review-${currentReviewItem.wq.questionId}-${reviewIndex}`}
-          question={currentReviewItem.q}
-          wrongQuestion={currentReviewItem.wq}
-          onClose={handleCloseReview}
-          onMastered={handleReviewMastered}
-          onWrong={handleReviewWrong}
-          isReviewMode
-        />
-      )}
+      {reviewMode && !reviewResult && currentReviewItem && (() => {
+        const wq = wrongQuestions.find(w => w.id === currentReviewItem.wrongQuestionId);
+        if (!wq) return null;
+        return (
+          <QuestionRedo
+            key={`review-${currentReviewItem.questionId}-${reviewIndex}`}
+            question={{
+              id: currentReviewItem.questionId,
+              content: currentReviewItem.content,
+              options: currentReviewItem.options,
+              type: currentReviewItem.type as Question['type'],
+              answer: currentReviewItem.answer,
+              explanation: currentReviewItem.explanation,
+              knowledgePoint: currentReviewItem.knowledgePoint,
+              difficulty: currentReviewItem.difficulty as Question['difficulty'],
+              chapterId: '',
+            }}
+            wrongQuestion={wq}
+            onClose={handleCloseReview}
+            onMastered={handleReviewMastered}
+            onWrong={handleReviewContinue}
+            isReviewMode
+          />
+        );
+      })()}
 
-      {reviewMode && showReviewStats && (
+      {reviewMode && reviewResult && (
         <ReviewComplete
-          total={reviewQueue.length}
-          mastered={reviewMastered}
+          total={reviewResult.total}
+          mastered={reviewResult.mastered}
+          knowledgePoints={reviewResult.knowledgePoints}
+          remaining={reviewResult.remaining}
           onClose={handleCloseReview}
         />
       )}

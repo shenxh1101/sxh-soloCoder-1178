@@ -258,7 +258,9 @@ export default function StudyPlan() {
               ))}
               {dailyTasks.length === 0 && (
                 <p className="text-surface-ink-light text-center py-6">
-                  请先生成学习计划，系统将为您自动安排每日任务
+                  {studyPlan
+                    ? '任务生成出现问题，请尝试修改学习计划'
+                    : '请先生成学习计划，系统将为您自动安排每日任务'}
                 </p>
               )}
             </div>

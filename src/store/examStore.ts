@@ -11,6 +11,7 @@ import type {
   CheckIn,
   Announcement,
   DailyTask,
+  ExamResult,
 } from '@/types';
 import * as storage from '@/data/storage';
 import { mockChapters } from '@/data/mockData';
@@ -52,10 +53,14 @@ interface ExamStore {
 
   saveExerciseRecord: (questionId: string, isCorrect: boolean, mode: 'chapter' | 'random' | 'timed') => void;
   getExerciseRecordsCount: () => { total: number; correct: number };
+  getPracticeRecordsCount: () => { total: number; correct: number };
   getCorrectRateByKnowledgePoint: () => Record<string, { total: number; correct: number; rate: number }>;
+  saveExamSession: (totalQuestions: number, correctCount: number, timeUsed: number) => void;
+  getExamSessions: () => ExamResult[];
 
   saveStudyPlan: (targetDate: string, targetScore: number, dailyTaskCount: number) => void;
   generateDailyTasks: () => DailyTask[];
+  ensureDailyTasksGenerated: () => void;
   toggleTaskCompleted: (taskId: string) => void;
   saveDailyCheckIn: () => void;
   hasCheckedInToday: () => boolean;
@@ -101,6 +106,13 @@ export const useExamStore = create<ExamStore>((set, get) => ({
         favoriteQuestionIds: storage.getFavoriteQuestions(user.id).map(f => f.questionId),
         dailyTasks: savedTasks || [],
       });
+      if (!savedTasks || savedTasks.length === 0) {
+        const plan = storage.getStudyPlan(user.id);
+        if (plan) {
+          const tasks = get().generateDailyTasks();
+          set({ dailyTasks: tasks });
+        }
+      }
     }
   },
 
@@ -326,10 +338,20 @@ export const useExamStore = create<ExamStore>((set, get) => ({
     return { total: records.length, correct };
   },
 
+  getPracticeRecordsCount: () => {
+    const { currentUser } = get();
+    if (!currentUser) return { total: 0, correct: 0 };
+    const allRecords = storage.getExerciseRecords(currentUser.id);
+    const records = allRecords.filter(r => r.mode !== 'timed');
+    const correct = records.filter(r => r.isCorrect).length;
+    return { total: records.length, correct };
+  },
+
   getCorrectRateByKnowledgePoint: () => {
     const { currentUser, questions } = get();
     if (!currentUser) return {};
-    const records = storage.getExerciseRecords(currentUser.id);
+    const allRecords = storage.getExerciseRecords(currentUser.id);
+    const records = allRecords.filter(r => r.mode !== 'timed');
 
     const result: Record<string, { total: number; correct: number; rate: number }> = {};
 
@@ -354,6 +376,30 @@ export const useExamStore = create<ExamStore>((set, get) => ({
     return result;
   },
 
+  saveExamSession: (totalQuestions: number, correctCount: number, timeUsed: number) => {
+    const { currentUser } = get();
+    if (!currentUser) return;
+
+    const result: ExamResult = {
+      id: `exam-${Date.now()}`,
+      userId: currentUser.id,
+      userName: currentUser.name,
+      score: Math.round((correctCount / totalQuestions) * 100),
+      totalQuestions,
+      correctCount,
+      mode: '模拟考试',
+      createdAt: new Date().toISOString(),
+    };
+
+    storage.saveExamResult(result);
+  },
+
+  getExamSessions: () => {
+    const { currentUser } = get();
+    if (!currentUser) return [];
+    return storage.getExamResults(currentUser.id);
+  },
+
   saveStudyPlan: (targetDate: string, targetScore: number, dailyTaskCount: number) => {
     const { currentUser } = get();
     if (!currentUser) return;
@@ -368,8 +414,18 @@ export const useExamStore = create<ExamStore>((set, get) => ({
 
     storage.saveStudyPlan(plan);
     set({ studyPlan: plan });
-    const tasks = get().generateDailyTasks();
-    set({ dailyTasks: tasks });
+    get().ensureDailyTasksGenerated();
+  },
+
+  ensureDailyTasksGenerated: () => {
+    const { currentUser, dailyTasks, studyPlan } = get();
+    if (!currentUser || !studyPlan) return;
+    const today = new Date().toISOString().split('T')[0];
+    const savedTasks = storage.getDailyTasks(currentUser.id, today);
+    if (!savedTasks || savedTasks.length === 0) {
+      const tasks = get().generateDailyTasks();
+      set({ dailyTasks: tasks });
+    }
   },
 
   generateDailyTasks: () => {
@@ -382,22 +438,52 @@ export const useExamStore = create<ExamStore>((set, get) => ({
       return savedTasks;
     }
 
+    const yesterday = new Date();
+    yesterday.setDate(yesterday.getDate() - 1);
+    const yesterdayStr = yesterday.toISOString().split('T')[0];
+    const yesterdayTasks = storage.getDailyTasks(currentUser.id, yesterdayStr);
+
+    const daysUntilExam = Math.ceil((new Date(studyPlan.targetDate).getTime() - Date.now()) / (1000 * 60 * 60 * 24));
+    const adjustedDailyCount = daysUntilExam <= 14
+      ? Math.min(studyPlan.dailyTaskCount + 2, 15)
+      : studyPlan.dailyTaskCount;
+
     const kpRates = get().getCorrectRateByKnowledgePoint();
-    const weakKp: string[] = [];
+    const weakKp: { kp: string; rate: number }[] = [];
     Object.entries(kpRates).forEach(([kp, data]) => {
-      if (data.rate < 60) {
-        for (let i = 0; i < 2; i++) weakKp.push(kp);
-      } else if (data.rate < 70) {
-        weakKp.push(kp);
+      if (data.rate < 70) {
+        weakKp.push({ kp, rate: data.rate });
       }
     });
+    weakKp.sort((a, b) => a.rate - b.rate);
 
     const tasks: DailyTask[] = [];
     let taskId = 1;
 
+    if (yesterdayTasks) {
+      yesterdayTasks.forEach(yt => {
+        if (!yt.completed) {
+          tasks.push({
+            id: `task-${taskId++}`,
+            chapterId: yt.chapterId,
+            chapterTitle: yt.chapterTitle,
+            courseTitle: yt.courseTitle,
+            type: yt.type,
+            completed: false,
+            urgency: yt.urgency === 'high' ? 'high' : 'medium',
+          });
+        }
+      });
+    }
+
+    const notYetCompletedCount = tasks.length;
+
     courses.forEach(course => {
       const courseChapters = chapters.filter(c => c.courseId === course.id).sort((a, b) => a.order - b.order);
       courseChapters.forEach(chapter => {
+        const taskExists = tasks.some(t => t.chapterId === chapter.id);
+        if (taskExists) return;
+
         const isCompleted = studyProgress.some(sp => sp.chapterId === chapter.id && sp.completed);
         if (!isCompleted) {
           tasks.push({
@@ -409,24 +495,28 @@ export const useExamStore = create<ExamStore>((set, get) => ({
             completed: false,
             urgency: 'medium',
           });
-        } else {
-          get().questions.forEach(q => {
-            if (q.chapterId === chapter.id) {
-              if (weakKp.includes(q.knowledgePoint)) {
-                tasks.push({
-                  id: `task-${taskId++}`,
-                  chapterId: chapter.id,
-                  chapterTitle: chapter.title,
-                  courseTitle: course.title,
-                  type: 'exercise',
-                  completed: false,
-                  urgency: q.knowledgePoint in kpRates && kpRates[q.knowledgePoint].rate < 40 ? 'high' : 'medium',
-                });
-              }
-            }
-          });
         }
       });
+    });
+
+    const reviewStartIndex = tasks.length;
+    weakKp.forEach(({ kp }) => {
+      const relatedQuestions = get().questions.filter(q => q.knowledgePoint === kp);
+      if (relatedQuestions.length > 0) {
+        const chId = relatedQuestions[0].chapterId;
+        const chapter = get().chapters.find(c => c.id === chId);
+        if (chapter && !tasks.some(t => t.chapterId === chId && t.type !== 'study')) {
+          tasks.push({
+            id: `task-${taskId++}`,
+            chapterId: chId,
+            chapterTitle: chapter.title,
+            courseTitle: courses.find(c => c.id === chapter.courseId)?.title || '',
+            type: 'exercise',
+            completed: false,
+            urgency: kpRates[kp] && kpRates[kp].rate < 40 ? 'high' : 'medium',
+          });
+        }
+      }
     });
 
     tasks.sort((a, b) => {
@@ -434,7 +524,7 @@ export const useExamStore = create<ExamStore>((set, get) => ({
       return urgencyOrder[a.urgency] - urgencyOrder[b.urgency];
     });
 
-    const selectedTasks = tasks.slice(0, studyPlan.dailyTaskCount);
+    const selectedTasks = tasks.slice(0, adjustedDailyCount);
     storage.saveDailyTasks(currentUser.id, today, selectedTasks);
     return selectedTasks;
   },

@@ -22,18 +22,21 @@ function formatTime(seconds: number): string {
 }
 
 export default function TimedMode() {
-  const { isFavorite, toggleFavorite, saveExerciseRecord } = useExamStore();
+  const { isFavorite, toggleFavorite, saveExerciseRecord, saveExamSession } = useExamStore();
 
   const [stage, setStage] = useState<'config' | 'answering'>('config');
   const [questions, setQuestions] = useState<Question[]>([]);
   const [currentIndex, setCurrentIndex] = useState(0);
   const [answers, setAnswers] = useState<Record<string, AnswerState>>({});
   const [timeRemaining, setTimeRemaining] = useState(TOTAL_TIME);
+  const [correctCount, setCorrectCount] = useState(0);
   const [showReport, setShowReport] = useState(false);
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const timeRemainingRef = useRef(TOTAL_TIME);
   const questionsRef = useRef(questions);
   const answersRef = useRef(answers);
+  const submittedRef = useRef(false);
+  const startTimeRef = useRef(Date.now());
   questionsRef.current = questions;
   answersRef.current = answers;
 
@@ -43,7 +46,10 @@ export default function TimedMode() {
     setAnswers({});
     setTimeRemaining(TOTAL_TIME);
     timeRemainingRef.current = TOTAL_TIME;
+    setCorrectCount(0);
     setShowReport(false);
+    submittedRef.current = false;
+    startTimeRef.current = Date.now();
     setStage('answering');
   };
 
@@ -53,17 +59,7 @@ export default function TimedMode() {
         timeRemainingRef.current -= 1;
         if (timeRemainingRef.current <= 0) {
           setTimeRemaining(0);
-          if (timerRef.current) {
-            clearInterval(timerRef.current);
-            timerRef.current = null;
-          }
-          questionsRef.current.forEach(q => {
-            const ans = answersRef.current[q.id];
-            if (!ans || !ans.submitted) {
-              saveExerciseRecord(q.id, false, 'timed');
-            }
-          });
-          setShowReport(true);
+          handleSubmitExam();
         } else {
           setTimeRemaining(timeRemainingRef.current);
         }
@@ -75,21 +71,11 @@ export default function TimedMode() {
         timerRef.current = null;
       }
     };
-  }, [stage, saveExerciseRecord]);
-
-  const saveUnansweredAsWrong = useCallback(() => {
-    questions.forEach(q => {
-      const ans = answers[q.id];
-      if (!ans || !ans.submitted) {
-        saveExerciseRecord(q.id, false, 'timed');
-      }
-    });
-  }, [questions, answers, saveExerciseRecord]);
+  }, [stage]);
 
   const currentQuestion = questions[currentIndex] || null;
 
   const totalSubmitted = questions.filter(q => answers[q.id]?.submitted).length;
-  const correctCount = questions.filter(q => answers[q.id]?.isCorrect).length;
   const wrongCount = questions.length - correctCount;
   const duration = TOTAL_TIME - timeRemaining;
 
@@ -128,12 +114,7 @@ export default function TimedMode() {
     saveExerciseRecord(currentQuestion.id, correct, 'timed');
 
     if (currentIndex === questions.length - 1) {
-      if (timerRef.current) {
-        clearInterval(timerRef.current);
-        timerRef.current = null;
-      }
-      saveUnansweredAsWrong();
-      setShowReport(true);
+      handleSubmitExam();
     }
   };
 
@@ -158,14 +139,36 @@ export default function TimedMode() {
     setCurrentIndex(index);
   };
 
-  const handleSubmitExam = () => {
+  const handleSubmitExam = useCallback(() => {
+    if (submittedRef.current) return;
+    submittedRef.current = true;
+
     if (timerRef.current) {
       clearInterval(timerRef.current);
       timerRef.current = null;
     }
-    saveUnansweredAsWrong();
+
+    const qs = questionsRef.current;
+    const ans = answersRef.current;
+    let passedCount = 0;
+
+    qs.forEach((q) => {
+      const a = ans[q.id];
+      if (a && a.submitted && a.isCorrect) {
+        passedCount++;
+      } else if (!a || !a.submitted) {
+        saveExerciseRecord(q.id, false, 'timed');
+      }
+    });
+
+    const elapsed = Math.floor((Date.now() - startTimeRef.current) / 1000);
+    const finalTime = elapsed > TOTAL_TIME ? TOTAL_TIME : elapsed;
+
+    saveExamSession(qs.length, passedCount, finalTime);
+
+    setCorrectCount(passedCount);
     setShowReport(true);
-  };
+  }, [saveExerciseRecord, saveExamSession]);
 
   const navStatuses = useMemo(() => {
     return questions.map(q => {

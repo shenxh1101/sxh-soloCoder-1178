@@ -26,6 +26,8 @@ import {
   Send,
   User2,
   BarChart3,
+  ChevronDown,
+  ChevronUp,
 } from 'lucide-react';
 
 const PIE_COLORS = ['#4caf7d', '#e07b5a'];
@@ -35,30 +37,32 @@ const BAR_COLORS = {
   bad: '#e07b5a',
 };
 
-interface MockExam {
-  id: string;
-  name: string;
-  score: number;
-  totalQuestions: number;
-  correctCount: number;
-  date: string;
-  rank: number;
-}
-
-const MOCK_EXAMS: MockExam[] = [
-  { id: 'exam-1', name: '第一次模拟考试', score: 72, totalQuestions: 100, correctCount: 72, date: '2026-05-10', rank: 15 },
-  { id: 'exam-2', name: '第二次模拟考试', score: 78, totalQuestions: 100, correctCount: 78, date: '2026-05-24', rank: 12 },
-  { id: 'exam-3', name: '期中综合测试', score: 85, totalQuestions: 80, correctCount: 68, date: '2026-06-01', rank: 8 },
-  { id: 'exam-4', name: '章节专项测试', score: 90, totalQuestions: 50, correctCount: 45, date: '2026-06-08', rank: 5 },
-];
-
 function formatDate(dateStr: string): string {
   return new Date(dateStr).toLocaleDateString('zh-CN', { month: 'short', day: 'numeric' });
 }
 
+function formatExamDate(isoStr: string): string {
+  return isoStr.split('T')[0];
+}
+
+const MODE_LABELS: Record<string, string> = {
+  chapter: '章节',
+  random: '随机',
+  timed: '限时',
+};
+
+function getStudentDetail(studentId: string) {
+  const progress = storage.getStudyProgress(studentId);
+  const records = storage.getExerciseRecords(studentId);
+  const wrongQs = storage.getWrongQuestions(studentId);
+  const checkIns = storage.getCheckIns(studentId);
+  const chapters = storage.getChapters();
+  return { progress, records, wrongQs, checkIns, chapters };
+}
+
 export default function Scores() {
   const currentUser = useExamStore((s) => s.currentUser);
-  const getExerciseRecordsCount = useExamStore((s) => s.getExerciseRecordsCount);
+  const getPracticeRecordsCount = useExamStore((s) => s.getPracticeRecordsCount);
   const getCorrectRateByKnowledgePoint = useExamStore((s) => s.getCorrectRateByKnowledgePoint);
   const getTotalProgress = useExamStore((s) => s.getTotalProgress);
   const getContinuousCheckInDays = useExamStore((s) => s.getContinuousCheckInDays);
@@ -66,15 +70,19 @@ export default function Scores() {
   const addAnnouncement = useExamStore((s) => s.addAnnouncement);
   const courses = useExamStore((s) => s.courses);
   const chapters = useExamStore((s) => s.chapters);
+  const getExamSessions = useExamStore((s) => s.getExamSessions);
 
   const [annTitle, setAnnTitle] = useState('');
   const [annContent, setAnnContent] = useState('');
+  const [expandedStudentId, setExpandedStudentId] = useState<string | null>(null);
 
-  const { total, correct } = getExerciseRecordsCount();
+  const { total, correct } = getPracticeRecordsCount();
   const correctRate = total > 0 ? Math.round((correct / total) * 100) : 0;
   const totalProgress = Math.round(getTotalProgress());
   const continuousDays = getContinuousCheckInDays();
   const kpRates = getCorrectRateByKnowledgePoint();
+
+  const examSessions = getExamSessions ? getExamSessions() : [];
 
   const pieData = useMemo(() => [
     { name: '正确', value: correct },
@@ -93,11 +101,14 @@ export default function Scores() {
       .sort((a, b) => a.rate - b.rate);
   }, [kpRates]);
 
+  const students = useMemo(() => {
+    return storage.getUsers().filter(u => u.id !== currentUser?.id);
+  }, [currentUser]);
+
   const studentData = useMemo(() => {
-    const allUsers = storage.getUsers();
     const allChapters = storage.getChapters();
 
-    return allUsers.map((s: User) => {
+    return students.map((s: User) => {
       const progress = storage.getStudyProgress(s.id);
       const progressPercent = allChapters.length > 0
         ? Math.round((progress.filter(p => p.completed).length / allChapters.length) * 100)
@@ -119,7 +130,7 @@ export default function Scores() {
         role: s.role,
       };
     });
-  }, []);
+  }, [students]);
 
   const handlePublish = () => {
     if (!annTitle.trim() || !annContent.trim()) return;
@@ -314,44 +325,45 @@ export default function Scores() {
           <Trophy className="w-5 h-5 text-accent-gold" />
           模拟考试成绩
         </h2>
-        <div className="overflow-x-auto">
-          <table className="w-full text-sm">
-            <thead>
-              <tr className="bg-primary-50 rounded-lg">
-                <th className="text-left p-3 font-medium text-surface-ink rounded-l-lg">序号</th>
-                <th className="text-left p-3 font-medium text-surface-ink">考试名称</th>
-                <th className="text-center p-3 font-medium text-surface-ink">得分</th>
-                <th className="text-center p-3 font-medium text-surface-ink">正确率</th>
-                <th className="text-center p-3 font-medium text-surface-ink">日期</th>
-                <th className="text-center p-3 font-medium text-surface-ink rounded-r-lg">排名</th>
-              </tr>
-            </thead>
-            <tbody>
-              {MOCK_EXAMS.map((exam, i) => {
-                const rate = Math.round((exam.correctCount / exam.totalQuestions) * 100);
-                return (
+        {examSessions.length > 0 ? (
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="bg-primary-50 rounded-lg">
+                  <th className="text-left p-3 font-medium text-surface-ink rounded-l-lg">序号</th>
+                  <th className="text-left p-3 font-medium text-surface-ink">考试名称</th>
+                  <th className="text-center p-3 font-medium text-surface-ink">得分</th>
+                  <th className="text-center p-3 font-medium text-surface-ink">正确率</th>
+                  <th className="text-center p-3 font-medium text-surface-ink">日期</th>
+                  <th className="text-center p-3 font-medium text-surface-ink rounded-r-lg">排名</th>
+                </tr>
+              </thead>
+              <tbody>
+                {examSessions.map((exam, i) => (
                   <tr key={exam.id} className="border-b border-surface-border last:border-0 hover:bg-primary-50/50 transition-colors">
                     <td className="p-3 text-surface-ink-light">{i + 1}</td>
-                    <td className="p-3 font-medium">{exam.name}</td>
+                    <td className="p-3 font-medium">模拟考试 #{i + 1}</td>
                     <td className="p-3 text-center font-mono font-bold text-primary-500">{exam.score}</td>
                     <td className="p-3 text-center">
                       <span className={cn(
                         'font-mono',
-                        rate >= 80 ? 'text-accent-success' : rate >= 60 ? 'text-accent-gold' : 'text-accent-coral',
+                        exam.score >= 80 ? 'text-accent-success' : exam.score >= 60 ? 'text-accent-gold' : 'text-accent-coral',
                       )}>
-                        {rate}%
+                        {exam.score}%
                       </span>
                     </td>
-                    <td className="p-3 text-center text-surface-ink-light">{formatDate(exam.date)}</td>
+                    <td className="p-3 text-center text-surface-ink-light">{formatExamDate(exam.createdAt)}</td>
                     <td className="p-3 text-center">
-                      <span className="badge-primary font-mono">第{exam.rank}名</span>
+                      <span className="text-surface-ink-light font-mono">-</span>
                     </td>
                   </tr>
-                );
-              })}
-            </tbody>
-          </table>
-        </div>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        ) : (
+          <p className="text-surface-ink-light text-center py-8">暂无模拟考试记录</p>
+        )}
       </div>
 
       {isTeacher && (
@@ -421,40 +433,154 @@ export default function Scores() {
                     </tr>
                   </thead>
                   <tbody>
-                    {studentData.map((s) => (
-                      <tr key={s.id} className="border-b border-surface-border last:border-0 hover:bg-primary-50/50 transition-colors">
-                        <td className="p-3">
-                          <div className="flex items-center gap-2">
-                            <div className="w-8 h-8 rounded-full bg-primary-100 flex items-center justify-center text-primary-500 font-medium text-sm">
-                              {s.name.charAt(0)}
-                            </div>
-                            <span className="font-medium">{s.name}</span>
-                          </div>
-                        </td>
-                        <td className="p-3 text-center">
-                          <span className="text-xs text-surface-ink-light">
-                            {s.role === 'teacher' ? '老师' : '学员'}
-                          </span>
-                        </td>
-                        <td className="p-3">
-                          <div className="flex items-center gap-2 justify-center">
-                            <div className="progress-bar flex-1 max-w-[120px]">
-                              <div className="progress-fill" style={{ width: `${s.progress}%` }} />
-                            </div>
-                            <span className="font-mono text-xs text-surface-ink-light w-10">{s.progress}%</span>
-                          </div>
-                        </td>
-                        <td className="p-3 text-center">
-                          <span className={cn(
-                            'font-mono',
-                            s.correctRate >= 80 ? 'text-accent-success' : s.correctRate >= 60 ? 'text-accent-gold' : 'text-accent-coral',
-                          )}>
-                            {s.correctRate}%
-                          </span>
-                        </td>
-                        <td className="p-3 text-center text-surface-ink-light">{s.lastActive}</td>
-                      </tr>
-                    ))}
+                    {studentData.map((s) => {
+                      const isExpanded = expandedStudentId === s.id;
+                      const detail = isExpanded ? getStudentDetail(s.id) : null;
+                      const last7Days = Array.from({ length: 7 }, (_, i) => {
+                        const d = new Date();
+                        d.setDate(d.getDate() - i);
+                        return d.toISOString().split('T')[0];
+                      }).reverse();
+
+                      return (
+                        <tr key={s.id}>
+                          <td colSpan={5} className="p-0">
+                            <table className="w-full text-sm">
+                              <tbody>
+                                <tr
+                                  className={cn(
+                                    'border-b border-surface-border last:border-0 hover:bg-primary-50/50 transition-colors cursor-pointer',
+                                    isExpanded && 'bg-primary-50/50',
+                                  )}
+                                  onClick={() => setExpandedStudentId(isExpanded ? null : s.id)}
+                                >
+                                  <td className="p-3" style={{ width: '30%' }}>
+                                    <div className="flex items-center gap-2">
+                                      <div className="w-8 h-8 rounded-full bg-primary-100 flex items-center justify-center text-primary-500 font-medium text-sm">
+                                        {s.name.charAt(0)}
+                                      </div>
+                                      <span className="font-medium">{s.name}</span>
+                                      {isExpanded ? (
+                                        <ChevronUp className="w-4 h-4 text-surface-ink-light ml-auto" />
+                                      ) : (
+                                        <ChevronDown className="w-4 h-4 text-surface-ink-light ml-auto" />
+                                      )}
+                                    </div>
+                                  </td>
+                                  <td className="p-3 text-center" style={{ width: '12%' }}>
+                                    <span className="text-xs text-surface-ink-light">
+                                      {s.role === 'teacher' ? '老师' : '学员'}
+                                    </span>
+                                  </td>
+                                  <td className="p-3" style={{ width: '28%' }}>
+                                    <div className="flex items-center gap-2 justify-center">
+                                      <div className="progress-bar flex-1 max-w-[120px]">
+                                        <div className="progress-fill" style={{ width: `${s.progress}%` }} />
+                                      </div>
+                                      <span className="font-mono text-xs text-surface-ink-light w-10">{s.progress}%</span>
+                                    </div>
+                                  </td>
+                                  <td className="p-3 text-center" style={{ width: '15%' }}>
+                                    <span className={cn(
+                                      'font-mono',
+                                      s.correctRate >= 80 ? 'text-accent-success' : s.correctRate >= 60 ? 'text-accent-gold' : 'text-accent-coral',
+                                    )}>
+                                      {s.correctRate}%
+                                    </span>
+                                  </td>
+                                  <td className="p-3 text-center text-surface-ink-light" style={{ width: '15%' }}>{s.lastActive}</td>
+                                </tr>
+                              </tbody>
+                            </table>
+                            {isExpanded && detail && (
+                              <div className="bg-primary-50/50 p-6 animate-slide-up">
+                                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                                  <div className="card">
+                                    <h4 className="font-serif font-semibold text-primary-500 mb-3">课程进度</h4>
+                                    <div className="space-y-2">
+                                      {courses.map((course) => {
+                                        const courseChapters = detail.chapters.filter(c => c.courseId === course.id);
+                                        const completed = courseChapters.filter(c =>
+                                          detail.progress.some(sp => sp.chapterId === c.id && sp.completed),
+                                        ).length;
+                                        const pct = courseChapters.length > 0 ? (completed / courseChapters.length) * 100 : 0;
+                                        return (
+                                          <div key={course.id}>
+                                            <div className="flex justify-between text-xs mb-1">
+                                              <span className="font-medium truncate max-w-[140px]">{course.title}</span>
+                                              <span className="text-surface-ink-light font-mono">
+                                                {completed}/{courseChapters.length}
+                                              </span>
+                                            </div>
+                                            <div className="progress-bar">
+                                              <div className="progress-fill" style={{ width: `${pct}%` }} />
+                                            </div>
+                                          </div>
+                                        );
+                                      })}
+                                    </div>
+                                  </div>
+                                  <div className="card">
+                                    <h4 className="font-serif font-semibold text-primary-500 mb-3">最近练习</h4>
+                                    {detail.records.length > 0 ? (
+                                      <div className="space-y-1.5">
+                                        {detail.records.slice(-5).reverse().map((r) => (
+                                          <div key={r.id} className="flex items-center justify-between text-xs py-1 border-b border-surface-border last:border-0">
+                                            <span className="font-mono text-surface-ink-light">{r.questionId}</span>
+                                            <span className={r.isCorrect ? 'text-accent-success' : 'text-accent-coral'}>
+                                              {r.isCorrect ? '✓' : '✗'}
+                                            </span>
+                                            <span className="text-surface-ink-light">{MODE_LABELS[r.mode] || r.mode}</span>
+                                            <span className="text-surface-ink-light">{formatExamDate(r.createdAt)}</span>
+                                          </div>
+                                        ))}
+                                      </div>
+                                    ) : (
+                                      <p className="text-surface-ink-light text-sm">暂无练习记录</p>
+                                    )}
+                                  </div>
+                                  <div className="card">
+                                    <h4 className="font-serif font-semibold text-primary-500 mb-3">错题统计</h4>
+                                    <p className="text-3xl font-mono font-bold text-accent-coral">{detail.wrongQs.length}</p>
+                                    <p className="text-sm text-surface-ink-light">当前未掌握错题</p>
+                                  </div>
+                                  <div className="card">
+                                    <h4 className="font-serif font-semibold text-primary-500 mb-3">最近打卡</h4>
+                                    {(() => {
+                                      const checkedInDates = detail.checkIns
+                                        .filter(c => last7Days.includes(c.checkDate))
+                                        .map(c => c.checkDate);
+                                      return checkedInDates.length > 0 ? (
+                                        <div className="flex flex-wrap gap-1.5">
+                                          {last7Days.map((date) => {
+                                            const isChecked = checkedInDates.includes(date);
+                                            return (
+                                              <span
+                                                key={date}
+                                                className={cn(
+                                                  'px-2 py-1 rounded text-xs font-mono',
+                                                  isChecked
+                                                    ? 'bg-accent-success/10 text-accent-success border border-accent-success/30'
+                                                    : 'bg-surface-border/30 text-surface-ink-light',
+                                                )}
+                                              >
+                                                {date.slice(5)}
+                                              </span>
+                                            );
+                                          })}
+                                        </div>
+                                      ) : (
+                                        <p className="text-surface-ink-light text-sm">暂无打卡记录</p>
+                                      );
+                                    })()}
+                                  </div>
+                                </div>
+                              </div>
+                            )}
+                          </td>
+                        </tr>
+                      );
+                    })}
                   </tbody>
                 </table>
               </div>
