@@ -1,6 +1,7 @@
 import { useState, useMemo, useCallback, useRef, useEffect } from 'react';
 import { useExamStore } from '@/store/examStore';
 import { cn } from '@/lib/utils';
+import * as storage from '@/data/storage';
 import type { WrongQuestion, Question } from '@/types';
 import {
   Search,
@@ -12,6 +13,9 @@ import {
   BookOpen,
   Target,
   Trash2,
+  BookMarked,
+  Star,
+  RotateCw,
 } from 'lucide-react';
 
 function formatDate(iso: string): string {
@@ -43,11 +47,15 @@ function QuestionRedo({
   wrongQuestion,
   onClose,
   onMastered,
+  onWrong,
+  isReviewMode,
 }: {
   question: Question;
   wrongQuestion: WrongQuestion;
   onClose: () => void;
   onMastered: () => void;
+  onWrong?: () => void;
+  isReviewMode?: boolean;
 }) {
   const [selected, setSelected] = useState<string | null>(null);
   const [result, setResult] = useState<'correct' | 'wrong' | null>(null);
@@ -129,6 +137,14 @@ function QuestionRedo({
             <XCircle className="w-5 h-5 text-accent-coral inline mr-2" />
             <span className="font-medium text-accent-coral">回答错误</span>
             <p className="mt-2 text-surface-ink-light text-sm leading-relaxed">{question.explanation}</p>
+            {isReviewMode && onWrong && (
+              <button
+                onClick={onWrong}
+                className="btn-secondary mt-4"
+              >
+                下一题
+              </button>
+            )}
           </div>
         )}
       </div>
@@ -136,18 +152,67 @@ function QuestionRedo({
   );
 }
 
+function ReviewComplete({
+  total,
+  mastered,
+  onClose,
+}: {
+  total: number;
+  mastered: number;
+  onClose: () => void;
+}) {
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-surface-ink/40 backdrop-blur-sm animate-fade-in">
+      <div className="relative bg-surface-card rounded-2xl shadow-modal max-w-md w-full mx-4 p-8 text-center">
+        <CheckCircle2 className="w-16 h-16 text-accent-success mx-auto mb-4" />
+        <h2 className="font-serif text-xl font-bold text-primary-500 mb-2">复习完成</h2>
+        <p className="text-surface-ink-light mb-6">
+          本次复习 <span className="font-bold text-primary-500">{total}</span> 题，
+          掌握 <span className="font-bold text-accent-success">{mastered}</span> 题
+        </p>
+        <div className="flex items-center justify-center gap-4 mb-6">
+          <div className="text-center">
+            <div className="w-16 h-16 rounded-full border-4 border-accent-success flex items-center justify-center mx-auto mb-2">
+              <span className="text-lg font-bold text-accent-success font-mono">{mastered}</span>
+            </div>
+            <span className="text-xs text-surface-ink-light">已掌握</span>
+          </div>
+          <div className="text-center">
+            <div className="w-16 h-16 rounded-full border-4 border-accent-coral flex items-center justify-center mx-auto mb-2">
+              <span className="text-lg font-bold text-accent-coral font-mono">{total - mastered}</span>
+            </div>
+            <span className="text-xs text-surface-ink-light">未掌握</span>
+          </div>
+        </div>
+        <button onClick={onClose} className="btn-primary w-full">
+          返回错题本
+        </button>
+      </div>
+    </div>
+  );
+}
+
 export default function WrongQuestions() {
+  const currentUser = useExamStore((s) => s.currentUser);
   const wrongQuestions = useExamStore((s) => s.wrongQuestions);
   const questions = useExamStore((s) => s.questions);
   const getAllKnowledgePoints = useExamStore((s) => s.getAllKnowledgePoints);
   const markAsMastered = useExamStore((s) => s.markAsMastered);
   const updateWrongNote = useExamStore((s) => s.updateWrongNote);
+  const getFavoriteQuestions = useExamStore((s) => s.getFavoriteQuestions);
+  const saveExerciseRecord = useExamStore((s) => s.saveExerciseRecord);
 
+  const [tab, setTab] = useState<'wrong' | 'favorite'>('wrong');
   const [filterKp, setFilterKp] = useState<string>('all');
   const [expandedId, setExpandedId] = useState<string | null>(null);
   const [redoId, setRedoId] = useState<string | null>(null);
   const [noteValues, setNoteValues] = useState<Record<string, string>>({});
   const saveTimerRef = useRef<Record<string, ReturnType<typeof setTimeout>>>({});
+
+  const [reviewMode, setReviewMode] = useState(false);
+  const [reviewIndex, setReviewIndex] = useState(0);
+  const [reviewMastered, setReviewMastered] = useState(0);
+  const [showReviewStats, setShowReviewStats] = useState(false);
 
   const allKps = useMemo(() => getAllKnowledgePoints(), [getAllKnowledgePoints]);
 
@@ -169,6 +234,25 @@ export default function WrongQuestions() {
       return q?.knowledgePoint === filterKp;
     });
   }, [wrongQuestions, questions, filterKp]);
+
+  const favoriteQuestions = useMemo(() => getFavoriteQuestions(), [getFavoriteQuestions]);
+
+  const favoriteData = useMemo(() => {
+    if (!currentUser) return [];
+    const favs = storage.getFavoriteQuestions(currentUser.id);
+    const favMap = new Map(favs.map(f => [f.questionId, f.createdAt]));
+    return favoriteQuestions.map(q => ({
+      question: q,
+      favoritedAt: favMap.get(q.id) || '',
+    }));
+  }, [favoriteQuestions, currentUser]);
+
+  const reviewQueue = useMemo(() => {
+    return wrongQuestions
+      .filter(wq => !wq.mastered)
+      .map(wq => ({ wq, q: questions.find(q => q.id === wq.questionId) }))
+      .filter((item): item is { wq: WrongQuestion; q: Question } => !!item.q);
+  }, [wrongQuestions, questions]);
 
   useEffect(() => {
     const init: Record<string, string> = {};
@@ -193,165 +277,295 @@ export default function WrongQuestions() {
 
   const getQuestionById = (id: string) => questions.find((q) => q.id === id);
 
+  const handleStartReview = () => {
+    if (reviewQueue.length === 0) return;
+    setReviewMode(true);
+    setReviewIndex(0);
+    setReviewMastered(0);
+    setShowReviewStats(false);
+  };
+
+  const handleReviewMastered = () => {
+    const current = reviewQueue[reviewIndex];
+    if (current) {
+      markAsMastered(current.wq.id);
+    }
+    const nextMastered = reviewMastered + 1;
+    setReviewMastered(nextMastered);
+    if (reviewIndex + 1 >= reviewQueue.length) {
+      setShowReviewStats(true);
+    } else {
+      setReviewIndex(reviewIndex + 1);
+    }
+  };
+
+  const handleReviewWrong = () => {
+    if (reviewIndex + 1 >= reviewQueue.length) {
+      setShowReviewStats(true);
+    } else {
+      setReviewIndex(reviewIndex + 1);
+    }
+  };
+
+  const handleCloseReview = () => {
+    setReviewMode(false);
+    setShowReviewStats(false);
+    setReviewIndex(0);
+    setReviewMastered(0);
+  };
+
+  const currentReviewItem = reviewQueue[reviewIndex];
+
   const redoQuestion = redoId ? getQuestionById(redoId) : null;
   const redoWq = redoId ? wrongQuestions.find((w) => w.questionId === redoId) : null;
 
+  const unmasteredCount = wrongQuestions.filter(wq => !wq.mastered).length;
+
   return (
-    <div className="animate-fade-in h-full flex gap-6">
-      <aside className="w-[280px] shrink-0 hidden lg:block">
-        <div className="card sticky top-6">
-          <h3 className="font-serif text-lg font-semibold text-primary-500 mb-4 flex items-center gap-2">
-            <Target className="w-4 h-4" />
-            知识点筛选
-          </h3>
-          <button
-            onClick={() => setFilterKp('all')}
-            className={cn(
-              'w-full text-left px-3 py-2 rounded-lg text-sm font-medium transition-colors mb-1',
-              filterKp === 'all'
-                ? 'bg-primary-500 text-white'
-                : 'hover:bg-primary-50 text-surface-ink-light',
-            )}
-          >
-            全部错题
-            <span className="float-right opacity-70">{wrongQuestions.length}</span>
-          </button>
-          <div className="mt-2 space-y-1">
-            {allKps.map((kp) => (
+    <div className="animate-fade-in">
+      <div className="flex items-center gap-2 mb-6">
+        <button
+          onClick={() => setTab('wrong')}
+          className={cn(
+            'flex items-center gap-2 px-4 py-2 rounded-xl font-medium text-sm transition-colors',
+            tab === 'wrong'
+              ? 'bg-primary-500 text-white'
+              : 'bg-surface-card text-surface-ink-light border border-surface-border hover:bg-primary-50',
+          )}
+        >
+          <BookMarked className="w-4 h-4" />
+          错题本
+        </button>
+        <button
+          onClick={() => setTab('favorite')}
+          className={cn(
+            'flex items-center gap-2 px-4 py-2 rounded-xl font-medium text-sm transition-colors',
+            tab === 'favorite'
+              ? 'bg-primary-500 text-white'
+              : 'bg-surface-card text-surface-ink-light border border-surface-border hover:bg-primary-50',
+          )}
+        >
+          <Star className="w-4 h-4" />
+          收藏题目
+        </button>
+      </div>
+
+      {tab === 'wrong' && (
+        <div className="flex gap-6">
+          <aside className="w-[280px] shrink-0 hidden lg:block">
+            <div className="card sticky top-6">
+              <h3 className="font-serif text-lg font-semibold text-primary-500 mb-4 flex items-center gap-2">
+                <Target className="w-4 h-4" />
+                知识点筛选
+              </h3>
               <button
-                key={kp}
-                onClick={() => setFilterKp(kp)}
+                onClick={() => setFilterKp('all')}
                 className={cn(
-                  'w-full text-left px-3 py-2 rounded-lg text-sm font-medium transition-colors',
-                  filterKp === kp
+                  'w-full text-left px-3 py-2 rounded-lg text-sm font-medium transition-colors mb-1',
+                  filterKp === 'all'
                     ? 'bg-primary-500 text-white'
                     : 'hover:bg-primary-50 text-surface-ink-light',
                 )}
               >
-                {kp}
-                <span className="float-right opacity-70">{kpCounts[kp] || 0}</span>
+                全部错题
+                <span className="float-right opacity-70">{wrongQuestions.length}</span>
               </button>
-            ))}
-          </div>
-          {allKps.length === 0 && (
-            <p className="text-surface-ink-light text-sm text-center py-4">暂无错题数据</p>
-          )}
-        </div>
-      </aside>
-
-      <main className="flex-1 min-w-0">
-        <div className="flex items-center justify-between mb-6">
-          <div>
-            <h1 className="font-serif text-2xl font-bold text-primary-500">错题本</h1>
-            <p className="text-surface-ink-light text-sm mt-1">
-              共 <span className="font-semibold text-accent-coral">{wrongQuestions.length}</span> 道错题
-            </p>
-          </div>
-          <div className="relative lg:hidden">
-            <Search className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-surface-ink-light" />
-            <select
-              value={filterKp}
-              onChange={(e) => setFilterKp(e.target.value)}
-              className="input-field pl-9 py-2 w-40 text-sm appearance-none"
-            >
-              <option value="all">全部 ({wrongQuestions.length})</option>
-              {allKps.map((kp) => (
-                <option key={kp} value={kp}>
-                  {kp} ({kpCounts[kp] || 0})
-                </option>
-              ))}
-            </select>
-          </div>
-        </div>
-
-        {filtered.length === 0 ? (
-          <div className="card text-center py-16">
-            <BookOpen className="w-12 h-12 text-surface-ink-light mx-auto mb-4" />
-            <p className="text-surface-ink-light text-lg font-serif">
-              {wrongQuestions.length === 0 ? '还没有错题，继续加油！' : '该知识点下没有错题'}
-            </p>
-          </div>
-        ) : (
-          <div className="space-y-4">
-            {filtered.map((wq) => {
-              const q = getQuestionById(wq.questionId);
-              if (!q) return null;
-              const isExpanded = expandedId === wq.id;
-
-              return (
-                <div key={wq.id} className="card animate-slide-up">
-                  <div
-                    className="cursor-pointer"
-                    onClick={() => setRedoId(wq.questionId)}
+              <div className="mt-2 space-y-1">
+                {allKps.map((kp) => (
+                  <button
+                    key={kp}
+                    onClick={() => setFilterKp(kp)}
+                    className={cn(
+                      'w-full text-left px-3 py-2 rounded-lg text-sm font-medium transition-colors',
+                      filterKp === kp
+                        ? 'bg-primary-500 text-white'
+                        : 'hover:bg-primary-50 text-surface-ink-light',
+                    )}
                   >
-                    <div className="flex items-start justify-between gap-4">
-                      <div className="flex-1 min-w-0">
-                        <p className="font-medium text-surface-ink line-clamp-2 leading-relaxed">
-                          {q.content.length > 50 ? q.content.slice(0, 50) + '...' : q.content}
-                        </p>
-                        <div className="flex items-center gap-2 mt-2 flex-wrap">
-                          <span className="badge-primary">{q.knowledgePoint}</span>
-                          <DifficultyBadge level={q.difficulty} />
-                          <span className="badge-danger">
-                            错{wq.wrongCount}次
-                          </span>
-                          <span className="text-xs text-surface-ink-light">
-                            {formatDate(wq.lastWrongAt)}
-                          </span>
+                    {kp}
+                    <span className="float-right opacity-70">{kpCounts[kp] || 0}</span>
+                  </button>
+                ))}
+              </div>
+              {allKps.length === 0 && (
+                <p className="text-surface-ink-light text-sm text-center py-4">暂无错题数据</p>
+              )}
+            </div>
+          </aside>
+
+          <main className="flex-1 min-w-0">
+            <div className="flex items-center justify-between mb-6">
+              <div>
+                <h1 className="font-serif text-2xl font-bold text-primary-500">错题本</h1>
+                <p className="text-surface-ink-light text-sm mt-1">
+                  共 <span className="font-semibold text-accent-coral">{wrongQuestions.length}</span> 道错题，
+                  未掌握 <span className="font-semibold text-accent-coral">{unmasteredCount}</span> 道
+                </p>
+              </div>
+              <div className="flex items-center gap-3">
+                {unmasteredCount > 0 && (
+                  <button onClick={handleStartReview} className="btn-primary flex items-center gap-2">
+                    <RotateCw className="w-4 h-4" />
+                    开始复习
+                  </button>
+                )}
+                <div className="relative lg:hidden">
+                  <Search className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-surface-ink-light" />
+                  <select
+                    value={filterKp}
+                    onChange={(e) => setFilterKp(e.target.value)}
+                    className="input-field pl-9 py-2 w-40 text-sm appearance-none"
+                  >
+                    <option value="all">全部 ({wrongQuestions.length})</option>
+                    {allKps.map((kp) => (
+                      <option key={kp} value={kp}>
+                        {kp} ({kpCounts[kp] || 0})
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              </div>
+            </div>
+
+            {filtered.length === 0 ? (
+              <div className="card text-center py-16">
+                <BookOpen className="w-12 h-12 text-surface-ink-light mx-auto mb-4" />
+                <p className="text-surface-ink-light text-lg font-serif">
+                  {wrongQuestions.length === 0 ? '还没有错题，继续加油！' : '该知识点下没有错题'}
+                </p>
+              </div>
+            ) : (
+              <div className="space-y-4">
+                {filtered.map((wq) => {
+                  const q = getQuestionById(wq.questionId);
+                  if (!q) return null;
+                  const isExpanded = expandedId === wq.id;
+
+                  return (
+                    <div key={wq.id} className="card animate-slide-up">
+                      <div
+                        className="cursor-pointer"
+                        onClick={() => setRedoId(wq.questionId)}
+                      >
+                        <div className="flex items-start justify-between gap-4">
+                          <div className="flex-1 min-w-0">
+                            <p className="font-medium text-surface-ink line-clamp-2 leading-relaxed">
+                              {q.content.length > 50 ? q.content.slice(0, 50) + '...' : q.content}
+                            </p>
+                            <div className="flex items-center gap-2 mt-2 flex-wrap">
+                              <span className="badge-primary">{q.knowledgePoint}</span>
+                              <DifficultyBadge level={q.difficulty} />
+                              <span className="badge-danger">
+                                错{wq.wrongCount}次
+                              </span>
+                              <span className="text-xs text-surface-ink-light">
+                                {formatDate(wq.lastWrongAt)}
+                              </span>
+                            </div>
+                          </div>
+
+                          <div className="flex items-center gap-1 shrink-0">
+                            <span className="text-xs text-surface-ink-light bg-primary-50 px-2 py-1 rounded-full">
+                              重做
+                            </span>
+                            <ChevronDown
+                              className={cn(
+                                'w-4 h-4 text-surface-ink-light transition-transform',
+                                isExpanded && 'rotate-180',
+                              )}
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                setExpandedId(isExpanded ? null : wq.id);
+                              }}
+                            />
+                          </div>
                         </div>
                       </div>
 
-                      <div className="flex items-center gap-1 shrink-0">
-                        <span className="text-xs text-surface-ink-light bg-primary-50 px-2 py-1 rounded-full">
-                          重做
+                      {isExpanded && (
+                        <div className="mt-4 pt-4 border-t border-surface-border animate-slide-up">
+                          <div className="bg-primary-50 rounded-xl p-4 mb-4">
+                            <p className="text-sm font-medium text-primary-600 mb-2">
+                              <BookOpen className="w-4 h-4 inline mr-1" />
+                              正确答案：{q.answer}
+                            </p>
+                            <p className="text-sm text-surface-ink-light leading-relaxed">{q.explanation}</p>
+                          </div>
+
+                          <div>
+                            <label className="text-sm font-medium text-surface-ink mb-2 block">
+                              我的笔记
+                            </label>
+                            <textarea
+                              value={noteValues[wq.id] ?? wq.note ?? ''}
+                              onChange={(e) => handleNoteChange(wq.id, e.target.value)}
+                              onClick={(e) => e.stopPropagation()}
+                              placeholder="记录这道题的解题思路或易错点..."
+                              className="input-field text-sm min-h-[80px] resize-none"
+                              rows={3}
+                            />
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </main>
+        </div>
+      )}
+
+      {tab === 'favorite' && (
+        <div>
+          <h1 className="font-serif text-2xl font-bold text-primary-500 mb-1">收藏题目</h1>
+          <p className="text-surface-ink-light text-sm mb-6">
+            共 <span className="font-semibold text-accent-gold">{favoriteData.length}</span> 道收藏
+          </p>
+
+          {favoriteData.length === 0 ? (
+            <div className="card text-center py-16">
+              <Star className="w-12 h-12 text-surface-ink-light mx-auto mb-4" />
+              <p className="text-surface-ink-light text-lg font-serif">还没有收藏题目</p>
+              <p className="text-surface-ink-light text-sm mt-1">在练习中点击星标即可收藏</p>
+            </div>
+          ) : (
+            <div className="space-y-4">
+              {favoriteData.map(({ question, favoritedAt }) => (
+                <div
+                  key={question.id}
+                  className="card animate-slide-up cursor-pointer hover:border-primary-300 transition-colors"
+                  onClick={() => setRedoId(question.id)}
+                >
+                  <div className="flex items-start justify-between gap-4">
+                    <div className="flex-1 min-w-0">
+                      <p className="font-medium text-surface-ink line-clamp-2 leading-relaxed">
+                        {question.content.length > 80 ? question.content.slice(0, 80) + '...' : question.content}
+                      </p>
+                      <div className="flex items-center gap-2 mt-2 flex-wrap">
+                        <span className="badge-primary">{question.knowledgePoint}</span>
+                        <DifficultyBadge level={question.difficulty} />
+                        <Star className="w-3 h-3 fill-accent-gold text-accent-gold" />
+                        <span className="text-xs text-surface-ink-light">
+                          {favoritedAt ? formatDate(favoritedAt) : ''}
                         </span>
-                        <ChevronDown
-                          className={cn(
-                            'w-4 h-4 text-surface-ink-light transition-transform',
-                            isExpanded && 'rotate-180',
-                          )}
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            setExpandedId(isExpanded ? null : wq.id);
-                          }}
-                        />
                       </div>
+                    </div>
+
+                    <div className="shrink-0">
+                      <span className="text-xs text-surface-ink-light bg-primary-50 px-2 py-1 rounded-full">
+                        答题
+                      </span>
                     </div>
                   </div>
-
-                  {isExpanded && (
-                    <div className="mt-4 pt-4 border-t border-surface-border animate-slide-up">
-                      <div className="bg-primary-50 rounded-xl p-4 mb-4">
-                        <p className="text-sm font-medium text-primary-600 mb-2">
-                          <BookOpen className="w-4 h-4 inline mr-1" />
-                          正确答案：{q.answer}
-                        </p>
-                        <p className="text-sm text-surface-ink-light leading-relaxed">{q.explanation}</p>
-                      </div>
-
-                      <div>
-                        <label className="text-sm font-medium text-surface-ink mb-2 block">
-                          我的笔记
-                        </label>
-                        <textarea
-                          value={noteValues[wq.id] ?? wq.note ?? ''}
-                          onChange={(e) => handleNoteChange(wq.id, e.target.value)}
-                          onClick={(e) => e.stopPropagation()}
-                          placeholder="记录这道题的解题思路或易错点..."
-                          className="input-field text-sm min-h-[80px] resize-none"
-                          rows={3}
-                        />
-                      </div>
-                    </div>
-                  )}
                 </div>
-              );
-            })}
-          </div>
-        )}
-      </main>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
 
-      {redoQuestion && redoWq && (
+      {tab === 'wrong' && redoQuestion && redoWq && (
         <QuestionRedo
           question={redoQuestion}
           wrongQuestion={redoWq}
@@ -360,6 +574,51 @@ export default function WrongQuestions() {
             markAsMastered(redoWq.id);
             setRedoId(null);
           }}
+        />
+      )}
+
+      {tab === 'favorite' && redoId && !reviewMode && (() => {
+        const favQ = questions.find(q => q.id === redoId);
+        if (!favQ) return null;
+        const existingWq = wrongQuestions.find(w => w.questionId === redoId);
+        const virtualWq: WrongQuestion = existingWq || {
+          id: `fav-${redoId}`,
+          userId: currentUser?.id || '',
+          questionId: redoId,
+          wrongCount: 0,
+          note: '',
+          mastered: false,
+          lastWrongAt: new Date().toISOString(),
+        };
+        return (
+          <QuestionRedo
+            question={favQ}
+            wrongQuestion={virtualWq}
+            onClose={() => setRedoId(null)}
+            onMastered={() => {
+              setRedoId(null);
+            }}
+          />
+        );
+      })()}
+
+      {reviewMode && !showReviewStats && currentReviewItem && (
+        <QuestionRedo
+          key={`review-${currentReviewItem.wq.questionId}-${reviewIndex}`}
+          question={currentReviewItem.q}
+          wrongQuestion={currentReviewItem.wq}
+          onClose={handleCloseReview}
+          onMastered={handleReviewMastered}
+          onWrong={handleReviewWrong}
+          isReviewMode
+        />
+      )}
+
+      {reviewMode && showReviewStats && (
+        <ReviewComplete
+          total={reviewQueue.length}
+          mastered={reviewMastered}
+          onClose={handleCloseReview}
         />
       )}
     </div>

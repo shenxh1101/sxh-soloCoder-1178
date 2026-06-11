@@ -1,5 +1,5 @@
 import { useState, useMemo, useCallback, useEffect, useRef } from 'react';
-import { Clock, AlertTriangle } from 'lucide-react';
+import { Clock } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { useExamStore } from '@/store/examStore';
 import type { Question } from '@/types';
@@ -22,16 +22,20 @@ function formatTime(seconds: number): string {
 }
 
 export default function TimedMode() {
-  const { isFavorite, toggleFavorite, saveExerciseRecord, addWrongQuestion } = useExamStore();
+  const { isFavorite, toggleFavorite, saveExerciseRecord } = useExamStore();
 
-  const [stage, setStage] = useState<'config' | 'answering' | 'complete'>('config');
+  const [stage, setStage] = useState<'config' | 'answering'>('config');
   const [questions, setQuestions] = useState<Question[]>([]);
   const [currentIndex, setCurrentIndex] = useState(0);
   const [answers, setAnswers] = useState<Record<string, AnswerState>>({});
   const [timeRemaining, setTimeRemaining] = useState(TOTAL_TIME);
-  const [showResult, setShowResult] = useState(false);
+  const [showReport, setShowReport] = useState(false);
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const timeRemainingRef = useRef(TOTAL_TIME);
+  const questionsRef = useRef(questions);
+  const answersRef = useRef(answers);
+  questionsRef.current = questions;
+  answersRef.current = answers;
 
   const handleStart = (generated: Question[]) => {
     setQuestions(generated);
@@ -39,6 +43,7 @@ export default function TimedMode() {
     setAnswers({});
     setTimeRemaining(TOTAL_TIME);
     timeRemainingRef.current = TOTAL_TIME;
+    setShowReport(false);
     setStage('answering');
   };
 
@@ -48,7 +53,17 @@ export default function TimedMode() {
         timeRemainingRef.current -= 1;
         if (timeRemainingRef.current <= 0) {
           setTimeRemaining(0);
-          setStage('complete');
+          if (timerRef.current) {
+            clearInterval(timerRef.current);
+            timerRef.current = null;
+          }
+          questionsRef.current.forEach(q => {
+            const ans = answersRef.current[q.id];
+            if (!ans || !ans.submitted) {
+              saveExerciseRecord(q.id, false, 'timed');
+            }
+          });
+          setShowReport(true);
         } else {
           setTimeRemaining(timeRemainingRef.current);
         }
@@ -60,22 +75,22 @@ export default function TimedMode() {
         timerRef.current = null;
       }
     };
-  }, [stage]);
+  }, [stage, saveExerciseRecord]);
 
-  useEffect(() => {
-    if (stage === 'complete') {
-      if (timerRef.current) {
-        clearInterval(timerRef.current);
-        timerRef.current = null;
+  const saveUnansweredAsWrong = useCallback(() => {
+    questions.forEach(q => {
+      const ans = answers[q.id];
+      if (!ans || !ans.submitted) {
+        saveExerciseRecord(q.id, false, 'timed');
       }
-      setShowResult(true);
-    }
-  }, [stage]);
+    });
+  }, [questions, answers, saveExerciseRecord]);
 
   const currentQuestion = questions[currentIndex] || null;
 
   const totalSubmitted = questions.filter(q => answers[q.id]?.submitted).length;
   const correctCount = questions.filter(q => answers[q.id]?.isCorrect).length;
+  const wrongCount = questions.length - correctCount;
   const duration = TOTAL_TIME - timeRemaining;
 
   const setAnswer = useCallback((questionId: string, updates: Partial<AnswerState>) => {
@@ -111,7 +126,15 @@ export default function TimedMode() {
 
     setAnswer(currentQuestion.id, { submitted: true, isCorrect: correct });
     saveExerciseRecord(currentQuestion.id, correct, 'timed');
-    if (!correct) addWrongQuestion(currentQuestion.id);
+
+    if (currentIndex === questions.length - 1) {
+      if (timerRef.current) {
+        clearInterval(timerRef.current);
+        timerRef.current = null;
+      }
+      saveUnansweredAsWrong();
+      setShowReport(true);
+    }
   };
 
   const handleToggleExplanation = () => {
@@ -128,8 +151,6 @@ export default function TimedMode() {
   const handleNext = () => {
     if (currentIndex < questions.length - 1) {
       setCurrentIndex(prev => prev + 1);
-    } else {
-      setStage('complete');
     }
   };
 
@@ -138,7 +159,12 @@ export default function TimedMode() {
   };
 
   const handleSubmitExam = () => {
-    setStage('complete');
+    if (timerRef.current) {
+      clearInterval(timerRef.current);
+      timerRef.current = null;
+    }
+    saveUnansweredAsWrong();
+    setShowReport(true);
   };
 
   const navStatuses = useMemo(() => {
@@ -149,7 +175,33 @@ export default function TimedMode() {
     });
   }, [questions, answers]);
 
+  const wrongDetails = useMemo(() => {
+    return questions
+      .filter(q => {
+        const ans = answers[q.id];
+        return !ans || !ans.submitted || !ans.isCorrect;
+      })
+      .map(q => {
+        const ans = answers[q.id];
+        const submitted = ans?.submitted || false;
+        const userAnswer = submitted ? (ans.selected || []).join('') : '未作答';
+        return {
+          questionId: q.id,
+          content: q.content,
+          correctAnswer: q.answer,
+          userAnswer,
+        };
+      });
+  }, [questions, answers]);
+
   const isTimeLow = timeRemaining <= 300;
+
+  const handleCloseReport = () => {
+    setShowReport(false);
+    setStage('config');
+    setQuestions([]);
+    setAnswers({});
+  };
 
   if (stage === 'config') {
     return (
@@ -159,54 +211,18 @@ export default function TimedMode() {
     );
   }
 
-  if (stage === 'complete') {
-    return (
-      <div className="animate-fade-in">
-        <ResultModal
-          open={showResult}
-          correctCount={correctCount}
-          total={questions.length}
-          duration={duration}
-          mode="timed"
-          onClose={() => setShowResult(false)}
-        />
-        <div className="card text-center py-10">
-          <div className="w-20 h-20 mx-auto mb-4 bg-green-50 rounded-full flex items-center justify-center">
-            <span className="text-3xl">⏰</span>
-          </div>
-          <h2 className="font-serif text-xl font-bold text-surface-ink mb-2">考试结束！</h2>
-          <p className="text-surface-ink-light mb-4">
-            共 {questions.length} 题，正确 {correctCount} 题，用时 {formatTime(duration)}
-          </p>
-          <div className="text-4xl font-mono font-bold text-primary-500 mb-2">
-            {questions.length > 0 ? Math.round((correctCount / questions.length) * 100) : 0}
-            <span className="text-xl text-surface-ink-light">分</span>
-          </div>
-          {timeRemaining === 0 && (
-            <p className="text-accent-coral text-sm flex items-center justify-center gap-1 mt-2">
-              <AlertTriangle className="w-4 h-4" />
-              时间到，系统自动交卷
-            </p>
-          )}
-          <div className="flex justify-center gap-3 mt-6">
-            <button
-              onClick={() => {
-                setStage('config');
-                setQuestions([]);
-                setAnswers({});
-              }}
-              className="btn-primary"
-            >
-              再来一次
-            </button>
-          </div>
-        </div>
-      </div>
-    );
-  }
-
   return (
     <div className="animate-fade-in">
+      <ResultModal
+        open={showReport}
+        totalQuestions={questions.length}
+        correctCount={correctCount}
+        wrongCount={wrongCount}
+        timeUsed={duration}
+        wrongDetails={wrongDetails}
+        onClose={handleCloseReport}
+      />
+
       <div className="flex items-center justify-between mb-4">
         <p className="text-sm text-surface-ink-light">
           已答 {totalSubmitted}/{questions.length} 题

@@ -56,7 +56,6 @@ export default function StudyPlan() {
   const saveDailyCheckIn = useExamStore((s) => s.saveDailyCheckIn);
   const hasCheckedInToday = useExamStore((s) => s.hasCheckedInToday);
   const getContinuousCheckInDays = useExamStore((s) => s.getContinuousCheckInDays);
-  const isChapterCompleted = useExamStore((s) => s.isChapterCompleted);
 
   const [showSetup, setShowSetup] = useState(!studyPlan);
   const [targetDate, setTargetDate] = useState(studyPlan?.targetDate || '');
@@ -97,7 +96,7 @@ export default function StudyPlan() {
 
   const reviewTasks = useMemo(() => {
     return dailyTasks
-      .filter((t) => !t.completed && t.type === 'review')
+      .filter((t) => t.type === 'review' || t.type === 'exercise')
       .sort((a, b) => {
         const order = { high: 0, medium: 1, low: 2 };
         return order[a.urgency] - order[b.urgency];
@@ -119,22 +118,11 @@ export default function StudyPlan() {
     exercise: '练习',
   };
 
-  const taskVariants = dailyTasks.length > 0 ? dailyTasks : [
-    ...courses.flatMap((course) => {
-      const courseChapters = chapters
-        .filter((c) => c.courseId === course.id)
-        .sort((a, b) => a.order - b.order);
-      return courseChapters.slice(0, 2).map((ch, i) => ({
-        id: `${course.id}-${ch.id}`,
-        chapterId: ch.id,
-        chapterTitle: ch.title,
-        courseTitle: course.title,
-        type: (i === 0 ? 'study' : 'review') as 'study' | 'review' | 'exercise',
-        completed: isChapterCompleted(ch.id),
-        urgency: (isChapterCompleted(ch.id) ? 'low' : 'medium') as 'high' | 'medium' | 'low',
-      }));
-    }).slice(0, 5),
-  ];
+  const urgencyBg: Record<string, string> = {
+    high: 'border-red-200 bg-red-50',
+    medium: 'border-amber-200 bg-amber-50',
+    low: 'border-green-200 bg-green-50',
+  };
 
   return (
     <div className="animate-fade-in">
@@ -236,13 +224,13 @@ export default function StudyPlan() {
                 <BookOpen className="w-5 h-5 text-primary-500" />
                 今日学习任务
                 <span className="text-sm font-normal text-surface-ink-light">
-                  ({completedCount}/{dailyTasks.length || taskVariants.length})
+                  ({completedCount}/{dailyTasks.length})
                 </span>
               </h2>
             </div>
 
             <div className="space-y-2">
-              {taskVariants.map((task) => (
+              {dailyTasks.map((task) => (
                 <label
                   key={task.id}
                   className={cn(
@@ -268,7 +256,7 @@ export default function StudyPlan() {
                   )}
                 </label>
               ))}
-              {taskVariants.length === 0 && (
+              {dailyTasks.length === 0 && (
                 <p className="text-surface-ink-light text-center py-6">
                   请先生成学习计划，系统将为您自动安排每日任务
                 </p>
@@ -304,19 +292,31 @@ export default function StudyPlan() {
                   <div
                     key={task.id}
                     className={cn(
-                      'flex items-center justify-between p-3 rounded-xl border',
-                      task.urgency === 'high'
-                        ? 'border-red-200 bg-red-50'
-                        : task.urgency === 'medium'
-                          ? 'border-amber-200 bg-amber-50'
-                          : 'border-green-200 bg-green-50',
+                      'flex items-center justify-between p-3 rounded-xl border transition-colors',
+                      task.completed ? 'bg-green-50 border-green-200' : urgencyBg[task.urgency],
                     )}
                   >
-                    <div className="flex-1 min-w-0">
-                      <p className="font-medium text-sm truncate">{task.chapterTitle}</p>
-                      <p className="text-xs text-surface-ink-light">{task.courseTitle}</p>
+                    <div className="flex items-center gap-3 flex-1 min-w-0">
+                      {task.urgency === 'high' && !task.completed && (
+                        <Flame className="w-4 h-4 text-accent-coral shrink-0" />
+                      )}
+                      {task.urgency === 'high' && task.completed && (
+                        <AlertTriangle className="w-4 h-4 text-accent-success shrink-0" />
+                      )}
+                      {task.urgency === 'medium' && !task.completed && (
+                        <AlertTriangle className="w-4 h-4 text-accent-gold shrink-0" />
+                      )}
+                      <div className={cn('flex-1 min-w-0', task.completed && 'line-through text-surface-ink-light')}>
+                        <p className="font-medium text-sm truncate">{task.chapterTitle}</p>
+                        <p className="text-xs text-surface-ink-light">{task.courseTitle}</p>
+                      </div>
                     </div>
-                    <UrgencyBadge urgency={task.urgency} />
+                    <div className="flex items-center gap-2 shrink-0">
+                      {task.completed && (
+                        <CheckCircle2 className="w-4 h-4 text-accent-success" />
+                      )}
+                      <UrgencyBadge urgency={task.urgency} />
+                    </div>
                   </div>
                 ))}
               </div>

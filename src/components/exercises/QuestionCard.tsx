@@ -168,7 +168,7 @@ export default function QuestionCard({
             disabled={!hasSelection}
             className="btn-primary text-sm"
           >
-            提交答案
+            {isLast ? '提交答卷' : '提交答案'}
           </button>
         ) : (
           <>

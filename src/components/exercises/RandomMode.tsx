@@ -1,4 +1,4 @@
-import { useState, useMemo, useCallback } from 'react';
+import { useState, useMemo, useCallback, useRef } from 'react';
 import { RefreshCw } from 'lucide-react';
 import { useExamStore } from '@/store/examStore';
 import type { Question } from '@/types';
@@ -15,20 +15,21 @@ type AnswerState = {
 };
 
 export default function RandomMode() {
-  const { isFavorite, toggleFavorite, saveExerciseRecord, addWrongQuestion } = useExamStore();
+  const { isFavorite, toggleFavorite, saveExerciseRecord } = useExamStore();
 
-  const [stage, setStage] = useState<'config' | 'answering' | 'complete'>('config');
+  const [stage, setStage] = useState<'config' | 'answering'>('config');
   const [questions, setQuestions] = useState<Question[]>([]);
   const [currentIndex, setCurrentIndex] = useState(0);
   const [answers, setAnswers] = useState<Record<string, AnswerState>>({});
-  const [startTime, setStartTime] = useState(0);
-  const [showResult, setShowResult] = useState(false);
+  const [showReport, setShowReport] = useState(false);
+  const startTimeRef = useRef(Date.now());
 
   const handleGenerate = (generated: Question[]) => {
     setQuestions(generated);
     setCurrentIndex(0);
     setAnswers({});
-    setStartTime(Date.now());
+    setShowReport(false);
+    startTimeRef.current = Date.now();
     setStage('answering');
   };
 
@@ -67,7 +68,10 @@ export default function RandomMode() {
 
     setAnswer(currentQuestion.id, { submitted: true, isCorrect: correct });
     saveExerciseRecord(currentQuestion.id, correct, 'random');
-    if (!correct) addWrongQuestion(currentQuestion.id);
+
+    if (currentIndex === questions.length - 1) {
+      setShowReport(true);
+    }
   };
 
   const handleToggleExplanation = () => {
@@ -84,8 +88,6 @@ export default function RandomMode() {
   const handleNext = () => {
     if (currentIndex < questions.length - 1) {
       setCurrentIndex(prev => prev + 1);
-    } else {
-      setStage('complete');
     }
   };
 
@@ -103,7 +105,24 @@ export default function RandomMode() {
 
   const totalSubmitted = questions.filter(q => answers[q.id]?.submitted).length;
   const correctCount = questions.filter(q => answers[q.id]?.isCorrect).length;
-  const duration = startTime ? Math.round((Date.now() - startTime) / 1000) : 0;
+  const wrongCount = totalSubmitted - correctCount;
+  const timeUsed = Math.round((Date.now() - startTimeRef.current) / 1000);
+
+  const wrongDetails = questions
+    .filter(q => answers[q.id]?.submitted && !answers[q.id]?.isCorrect)
+    .map(q => ({
+      questionId: q.id,
+      content: q.content,
+      correctAnswer: q.answer,
+      userAnswer: (answers[q.id]?.selected || []).join(''),
+    }));
+
+  const handleCloseReport = () => {
+    setShowReport(false);
+    setStage('config');
+    setQuestions([]);
+    setAnswers({});
+  };
 
   if (stage === 'config') {
     return (
@@ -113,57 +132,28 @@ export default function RandomMode() {
     );
   }
 
-  if (stage === 'complete') {
-    return (
-      <div className="animate-fade-in">
-        <ResultModal
-          open={showResult}
-          correctCount={correctCount}
-          total={questions.length}
-          duration={duration}
-          mode="random"
-          onClose={() => setShowResult(false)}
-        />
-        <div className="card text-center py-10">
-          <div className="w-20 h-20 mx-auto mb-4 bg-green-50 rounded-full flex items-center justify-center">
-            <span className="text-3xl">🎉</span>
-          </div>
-          <h2 className="font-serif text-xl font-bold text-surface-ink mb-2">练习完成！</h2>
-          <p className="text-surface-ink-light mb-4">
-            共 {questions.length} 题，正确 {correctCount} 题
-          </p>
-          <div className="text-4xl font-mono font-bold text-primary-500 mb-2">
-            {questions.length > 0 ? Math.round((correctCount / questions.length) * 100) : 0}
-            <span className="text-xl text-surface-ink-light">分</span>
-          </div>
-          <div className="flex justify-center gap-3 mt-6">
-            <button onClick={() => setShowResult(true)} className="btn-primary">
-              查看成绩报告
-            </button>
-            <button
-              onClick={() => {
-                setStage('config');
-                setQuestions([]);
-                setAnswers({});
-              }}
-              className="btn-secondary"
-            >
-              重新组卷
-            </button>
-          </div>
-        </div>
-      </div>
-    );
-  }
-
   return (
     <div className="animate-fade-in">
+      <ResultModal
+        open={showReport}
+        totalQuestions={questions.length}
+        correctCount={correctCount}
+        wrongCount={wrongCount}
+        timeUsed={timeUsed}
+        wrongDetails={wrongDetails}
+        onClose={handleCloseReport}
+      />
+
       <div className="flex items-center justify-between mb-4">
         <p className="text-sm text-surface-ink-light">
           已答 {totalSubmitted}/{questions.length} 题
         </p>
         <button
-          onClick={() => setStage('config')}
+          onClick={() => {
+            setStage('config');
+            setQuestions([]);
+            setAnswers({});
+          }}
           className="btn-ghost text-sm flex items-center gap-1"
         >
           <RefreshCw className="w-3.5 h-3.5" />

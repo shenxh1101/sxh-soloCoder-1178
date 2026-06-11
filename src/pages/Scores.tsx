@@ -1,7 +1,7 @@
 import { useState, useMemo } from 'react';
 import { useExamStore } from '@/store/examStore';
 import { cn } from '@/lib/utils';
-import { getUsers } from '@/data/storage';
+import * as storage from '@/data/storage';
 import type { User } from '@/types';
 import {
   BarChart,
@@ -93,28 +93,33 @@ export default function Scores() {
       .sort((a, b) => a.rate - b.rate);
   }, [kpRates]);
 
-  const students = useMemo(() => {
-    try {
-      return getUsers().filter((u: User) => u.role === 'student');
-    } catch {
-      return [];
-    }
-  }, []);
-
   const studentData = useMemo(() => {
-    return students.map((s: User, i: number) => {
-      const progress = 30 + Math.floor(Math.random() * 70);
-      const cr = 40 + Math.floor(Math.random() * 55);
+    const allUsers = storage.getUsers();
+    const allChapters = storage.getChapters();
+
+    return allUsers.map((s: User) => {
+      const progress = storage.getStudyProgress(s.id);
+      const progressPercent = allChapters.length > 0
+        ? Math.round((progress.filter(p => p.completed).length / allChapters.length) * 100)
+        : 0;
+
+      const records = storage.getExerciseRecords(s.id);
+      const correctRecords = records.filter(r => r.isCorrect).length;
+      const correctRatePercent = records.length > 0 ? Math.round((correctRecords / records.length) * 100) : 0;
+
+      const lastActive = storage.getLastActiveDate(s.id);
+
       return {
         id: s.id,
         name: s.name,
         avatar: s.avatar,
-        progress,
-        correctRate: cr,
-        lastActive: `${Math.floor(Math.random() * 3) + 1}天前`,
+        progress: progressPercent,
+        correctRate: correctRatePercent,
+        lastActive,
+        role: s.role,
       };
     });
-  }, [students]);
+  }, []);
 
   const handlePublish = () => {
     if (!annTitle.trim() || !annContent.trim()) return;
@@ -409,6 +414,7 @@ export default function Scores() {
                   <thead>
                     <tr className="bg-primary-50 rounded-lg">
                       <th className="text-left p-3 font-medium text-surface-ink rounded-l-lg">学员</th>
+                      <th className="text-center p-3 font-medium text-surface-ink">角色</th>
                       <th className="text-center p-3 font-medium text-surface-ink">学习进度</th>
                       <th className="text-center p-3 font-medium text-surface-ink">正确率</th>
                       <th className="text-center p-3 font-medium text-surface-ink rounded-r-lg">最近活动</th>
@@ -424,6 +430,11 @@ export default function Scores() {
                             </div>
                             <span className="font-medium">{s.name}</span>
                           </div>
+                        </td>
+                        <td className="p-3 text-center">
+                          <span className="text-xs text-surface-ink-light">
+                            {s.role === 'teacher' ? '老师' : '学员'}
+                          </span>
                         </td>
                         <td className="p-3">
                           <div className="flex items-center gap-2 justify-center">

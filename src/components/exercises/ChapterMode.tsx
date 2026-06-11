@@ -1,10 +1,11 @@
-import { useState, useMemo, useCallback } from 'react';
+import { useState, useMemo, useCallback, useRef } from 'react';
 import { ChevronDown } from 'lucide-react';
 import { useExamStore } from '@/store/examStore';
 import * as storage from '@/data/storage';
 import type { Question } from '@/types';
 import QuestionCard from './QuestionCard';
 import QuestionNav from './QuestionNav';
+import ResultModal from './ResultModal';
 
 type AnswerState = {
   selected: string[];
@@ -14,14 +15,15 @@ type AnswerState = {
 };
 
 export default function ChapterMode() {
-  const { courses, getChaptersByCourse, isFavorite, toggleFavorite, saveExerciseRecord, addWrongQuestion } = useExamStore();
+  const { courses, getChaptersByCourse, isFavorite, toggleFavorite, saveExerciseRecord } = useExamStore();
 
   const [selectedCourseId, setSelectedCourseId] = useState<string>('');
   const [selectedChapterId, setSelectedChapterId] = useState<string>('');
   const [questions, setQuestions] = useState<Question[]>([]);
   const [currentIndex, setCurrentIndex] = useState(0);
   const [answers, setAnswers] = useState<Record<string, AnswerState>>({});
-  const [isComplete, setIsComplete] = useState(false);
+  const [showReport, setShowReport] = useState(false);
+  const startTimeRef = useRef(Date.now());
 
   const chapters = useMemo(() => {
     if (!selectedCourseId) return [];
@@ -34,7 +36,7 @@ export default function ChapterMode() {
     setQuestions([]);
     setCurrentIndex(0);
     setAnswers({});
-    setIsComplete(false);
+    setShowReport(false);
   };
 
   const handleChapterChange = (chapterId: string) => {
@@ -43,7 +45,8 @@ export default function ChapterMode() {
     setQuestions(qs);
     setCurrentIndex(0);
     setAnswers({});
-    setIsComplete(false);
+    setShowReport(false);
+    startTimeRef.current = Date.now();
   };
 
   const currentQuestion = questions[currentIndex] || null;
@@ -81,7 +84,10 @@ export default function ChapterMode() {
 
     setAnswer(currentQuestion.id, { submitted: true, isCorrect: correct });
     saveExerciseRecord(currentQuestion.id, correct, 'chapter');
-    if (!correct) addWrongQuestion(currentQuestion.id);
+
+    if (currentIndex === questions.length - 1) {
+      setShowReport(true);
+    }
   };
 
   const handleToggleExplanation = () => {
@@ -98,8 +104,6 @@ export default function ChapterMode() {
   const handleNext = () => {
     if (currentIndex < questions.length - 1) {
       setCurrentIndex(prev => prev + 1);
-    } else {
-      setIsComplete(true);
     }
   };
 
@@ -117,53 +121,37 @@ export default function ChapterMode() {
 
   const completedCount = questions.filter(q => answers[q.id]?.submitted).length;
   const correctCount = questions.filter(q => answers[q.id]?.isCorrect).length;
+  const wrongCount = completedCount - correctCount;
+  const timeUsed = Math.round((Date.now() - startTimeRef.current) / 1000);
 
-  if (isComplete) {
-    return (
-      <div className="animate-fade-in">
-        <div className="card text-center py-10">
-          <div className="w-20 h-20 mx-auto mb-4 bg-green-50 rounded-full flex items-center justify-center">
-            <span className="text-3xl">🎉</span>
-          </div>
-          <h2 className="font-serif text-xl font-bold text-surface-ink mb-2">练习完成！</h2>
-          <p className="text-surface-ink-light mb-4">
-            共 {questions.length} 题，正确 {correctCount} 题
-          </p>
-          <div className="text-4xl font-mono font-bold text-primary-500 mb-2">
-            {questions.length > 0 ? Math.round((correctCount / questions.length) * 100) : 0}
-            <span className="text-xl text-surface-ink-light">分</span>
-          </div>
-          <div className="flex justify-center gap-3 mt-6">
-            <button
-              onClick={() => {
-                setCurrentIndex(0);
-                setAnswers({});
-                setIsComplete(false);
-              }}
-              className="btn-secondary"
-            >
-              重新练习
-            </button>
-            <button
-              onClick={() => {
-                setSelectedChapterId('');
-                setSelectedCourseId('');
-                setQuestions([]);
-                setAnswers({});
-                setIsComplete(false);
-              }}
-              className="btn-primary"
-            >
-              选择其他章节
-            </button>
-          </div>
-        </div>
-      </div>
-    );
-  }
+  const wrongDetails = questions
+    .filter(q => answers[q.id]?.submitted && !answers[q.id]?.isCorrect)
+    .map(q => ({
+      questionId: q.id,
+      content: q.content,
+      correctAnswer: q.answer,
+      userAnswer: (answers[q.id]?.selected || []).join(''),
+    }));
+
+  const handleCloseReport = () => {
+    setShowReport(false);
+    setCurrentIndex(0);
+    setAnswers({});
+    startTimeRef.current = Date.now();
+  };
 
   return (
     <div className="animate-fade-in">
+      <ResultModal
+        open={showReport}
+        totalQuestions={questions.length}
+        correctCount={correctCount}
+        wrongCount={wrongCount}
+        timeUsed={timeUsed}
+        wrongDetails={wrongDetails}
+        onClose={handleCloseReport}
+      />
+
       <div className="card mb-5">
         <div className="flex flex-col sm:flex-row gap-3">
           <div className="flex-1">

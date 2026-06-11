@@ -256,3 +256,58 @@ export function getAllKnowledgePoints(userId: string): string[] {
   });
   return Array.from(points).sort();
 }
+
+const DAILY_TASKS_KEY = 'exam_app_daily_tasks';
+
+export function getDailyTasks(userId: string, date: string): import('@/types').DailyTask[] | null {
+  const data = localStorage.getItem(DAILY_TASKS_KEY);
+  if (!data) return null;
+  const all = JSON.parse(data);
+  const key = `${userId}_${date}`;
+  return all[key] || null;
+}
+
+export function saveDailyTasks(userId: string, date: string, tasks: import('@/types').DailyTask[]): void {
+  const data = localStorage.getItem(DAILY_TASKS_KEY);
+  const all = data ? JSON.parse(data) : {};
+  const key = `${userId}_${date}`;
+  all[key] = tasks;
+  localStorage.setItem(DAILY_TASKS_KEY, JSON.stringify(all));
+}
+
+export function getExamResults(userId: string): import('@/types').ExamResult[] {
+  const data = localStorage.getItem('exam_app_exam_results');
+  if (!data) return [];
+  const all: import('@/types').ExamResult[] = JSON.parse(data);
+  return all.filter(r => r.userId === userId).sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+}
+
+export function saveExamResult(result: import('@/types').ExamResult): void {
+  const data = localStorage.getItem('exam_app_exam_results');
+  const all: import('@/types').ExamResult[] = data ? JSON.parse(data) : [];
+  all.push(result);
+  localStorage.setItem('exam_app_exam_results', JSON.stringify(all));
+}
+
+export function getExerciseRecordsByUser(userId: string): import('@/types').ExerciseRecord[] {
+  return getExerciseRecords(userId);
+}
+
+export function getLastActiveDate(userId: string): string {
+  const records = getExerciseRecords(userId);
+  const checkIns = getCheckIns(userId);
+  let latest = new Date(0);
+  records.forEach(r => {
+    const d = new Date(r.createdAt);
+    if (d > latest) latest = d;
+  });
+  checkIns.forEach(c => {
+    const d = new Date(c.checkDate);
+    if (d > latest) latest = d;
+  });
+  if (latest.getTime() === 0) return '暂无活动';
+  const diffDays = Math.floor((Date.now() - latest.getTime()) / (1000 * 60 * 60 * 24));
+  if (diffDays === 0) return '今天';
+  if (diffDays === 1) return '昨天';
+  return `${diffDays}天前`;
+}

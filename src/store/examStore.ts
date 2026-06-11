@@ -91,12 +91,15 @@ export const useExamStore = create<ExamStore>((set, get) => ({
       announcements: storage.getAnnouncements(),
     });
     if (user) {
+      const today = new Date().toISOString().split('T')[0];
+      const savedTasks = storage.getDailyTasks(user.id, today);
       set({
         wrongQuestions: storage.getWrongQuestions(user.id),
         studyProgress: storage.getStudyProgress(user.id),
         studyPlan: storage.getStudyPlan(user.id),
         checkIns: storage.getCheckIns(user.id),
         favoriteQuestionIds: storage.getFavoriteQuestions(user.id).map(f => f.questionId),
+        dailyTasks: savedTasks || [],
       });
     }
   },
@@ -106,6 +109,8 @@ export const useExamStore = create<ExamStore>((set, get) => ({
     const user = users.find(u => u.email.toLowerCase() === email.toLowerCase());
     if (user) {
       storage.setCurrentUser(user);
+      const today = new Date().toISOString().split('T')[0];
+      const savedTasks = storage.getDailyTasks(user.id, today);
       set({
         currentUser: user,
         wrongQuestions: storage.getWrongQuestions(user.id),
@@ -114,6 +119,7 @@ export const useExamStore = create<ExamStore>((set, get) => ({
         checkIns: storage.getCheckIns(user.id),
         favoriteQuestionIds: storage.getFavoriteQuestions(user.id).map(f => f.questionId),
         announcements: storage.getAnnouncements(),
+        dailyTasks: savedTasks || [],
       });
       return user;
     }
@@ -298,7 +304,17 @@ export const useExamStore = create<ExamStore>((set, get) => ({
     storage.saveExerciseRecord(record);
 
     if (!isCorrect) {
-      get().addWrongQuestion(questionId);
+      const wrongQ: WrongQuestion = {
+        id: `wq-${currentUser.id}-${questionId}`,
+        userId: currentUser.id,
+        questionId,
+        wrongCount: 1,
+        note: '',
+        mastered: false,
+        lastWrongAt: new Date().toISOString(),
+      };
+      storage.addWrongQuestion(wrongQ);
+      set({ wrongQuestions: storage.getWrongQuestions(currentUser.id) });
     }
   },
 
@@ -360,6 +376,22 @@ export const useExamStore = create<ExamStore>((set, get) => ({
     const { currentUser, chapters, studyProgress, courses, studyPlan } = get();
     if (!currentUser || !studyPlan) return [];
 
+    const today = new Date().toISOString().split('T')[0];
+    const savedTasks = storage.getDailyTasks(currentUser.id, today);
+    if (savedTasks && savedTasks.length > 0) {
+      return savedTasks;
+    }
+
+    const kpRates = get().getCorrectRateByKnowledgePoint();
+    const weakKp: string[] = [];
+    Object.entries(kpRates).forEach(([kp, data]) => {
+      if (data.rate < 60) {
+        for (let i = 0; i < 2; i++) weakKp.push(kp);
+      } else if (data.rate < 70) {
+        weakKp.push(kp);
+      }
+    });
+
     const tasks: DailyTask[] = [];
     let taskId = 1;
 
@@ -377,27 +409,46 @@ export const useExamStore = create<ExamStore>((set, get) => ({
             completed: false,
             urgency: 'medium',
           });
+        } else {
+          get().questions.forEach(q => {
+            if (q.chapterId === chapter.id) {
+              if (weakKp.includes(q.knowledgePoint)) {
+                tasks.push({
+                  id: `task-${taskId++}`,
+                  chapterId: chapter.id,
+                  chapterTitle: chapter.title,
+                  courseTitle: course.title,
+                  type: 'exercise',
+                  completed: false,
+                  urgency: q.knowledgePoint in kpRates && kpRates[q.knowledgePoint].rate < 40 ? 'high' : 'medium',
+                });
+              }
+            }
+          });
         }
       });
     });
 
-    const today = new Date().toDateString();
-    const checkIn = get().checkIns.find(c => c.checkDate === today);
-    tasks.forEach((task, index) => {
-      if (checkIn && index < checkIn.completedTasks) {
-        task.completed = true;
-      }
+    tasks.sort((a, b) => {
+      const urgencyOrder: Record<string, number> = { high: 0, medium: 1, low: 2 };
+      return urgencyOrder[a.urgency] - urgencyOrder[b.urgency];
     });
 
-    return tasks.slice(0, studyPlan.dailyTaskCount);
+    const selectedTasks = tasks.slice(0, studyPlan.dailyTaskCount);
+    storage.saveDailyTasks(currentUser.id, today, selectedTasks);
+    return selectedTasks;
   },
 
   toggleTaskCompleted: (taskId: string) => {
-    const { dailyTasks } = get();
+    const { dailyTasks, currentUser } = get();
     const newTasks = dailyTasks.map(task =>
       task.id === taskId ? { ...task, completed: !task.completed } : task
     );
     set({ dailyTasks: newTasks });
+    if (currentUser) {
+      const today = new Date().toISOString().split('T')[0];
+      storage.saveDailyTasks(currentUser.id, today, newTasks);
+    }
   },
 
   saveDailyCheckIn: () => {
