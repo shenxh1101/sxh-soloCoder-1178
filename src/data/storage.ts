@@ -311,3 +311,45 @@ export function getLastActiveDate(userId: string): string {
   if (diffDays === 1) return '昨天';
   return `${diffDays}天前`;
 }
+
+const REVIEW_LEFTOVER_KPS_KEY = 'exam_app_review_leftover_kps';
+
+export function getReviewLeftoverKPs(userId: string): string[] {
+  const data = localStorage.getItem(REVIEW_LEFTOVER_KPS_KEY);
+  if (!data) return [];
+  const all = JSON.parse(data);
+  return all[userId] || [];
+}
+
+export function saveReviewLeftoverKPs(userId: string, kps: string[]): void {
+  const data = localStorage.getItem(REVIEW_LEFTOVER_KPS_KEY);
+  const all = data ? JSON.parse(data) : {};
+  all[userId] = kps;
+  localStorage.setItem(REVIEW_LEFTOVER_KPS_KEY, JSON.stringify(all));
+}
+
+export function clearReviewLeftoverKPs(userId: string): void {
+  const data = localStorage.getItem(REVIEW_LEFTOVER_KPS_KEY);
+  if (!data) return;
+  const all = JSON.parse(data);
+  delete all[userId];
+  localStorage.setItem(REVIEW_LEFTOVER_KPS_KEY, JSON.stringify(all));
+}
+
+const TEACHER_NOTES_KEY = 'exam_app_teacher_notes';
+
+export function getTeacherReminderNotes(): Record<string, Record<string, string>> {
+  const data = localStorage.getItem(TEACHER_NOTES_KEY);
+  return data ? JSON.parse(data) : {};
+}
+
+export function saveTeacherReminderNote(teacherId: string, studentId: string, note: string): void {
+  const all = getTeacherReminderNotes();
+  if (!all[teacherId]) all[teacherId] = {};
+  if (note.trim()) {
+    all[teacherId][studentId] = note;
+  } else {
+    delete all[teacherId][studentId];
+  }
+  localStorage.setItem(TEACHER_NOTES_KEY, JSON.stringify(all));
+}

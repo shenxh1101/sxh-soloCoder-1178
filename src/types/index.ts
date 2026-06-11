@@ -109,6 +109,7 @@ export interface DailyTask {
   type: 'study' | 'review' | 'exercise';
   completed: boolean;
   urgency: 'high' | 'medium' | 'low';
+  source?: string;
 }
 
 export interface ExamResult {

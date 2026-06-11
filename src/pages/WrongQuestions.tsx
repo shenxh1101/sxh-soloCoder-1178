@@ -246,6 +246,7 @@ export default function WrongQuestions() {
   const updateWrongNote = useExamStore((s) => s.updateWrongNote);
   const getFavoriteQuestions = useExamStore((s) => s.getFavoriteQuestions);
   const saveExerciseRecord = useExamStore((s) => s.saveExerciseRecord);
+  const saveReviewLeftoverKPs = useExamStore((s) => s.saveReviewLeftoverKPs);
 
   const [tab, setTab] = useState<'wrong' | 'favorite'>('wrong');
   const [filterKp, setFilterKp] = useState<string>('all');
@@ -368,6 +369,14 @@ export default function WrongQuestions() {
         mastered: newMasteredCount,
         knowledgePoints: Array.from(kps).sort(),
       });
+
+      const remainingMastered = wrongQuestions.filter(wq => !wq.mastered);
+      const leftoverKPs = new Set<string>();
+      remainingMastered.forEach(wq => {
+        const q = questions.find(q => q.id === wq.questionId);
+        if (q) leftoverKPs.add(q.knowledgePoint);
+      });
+      saveReviewLeftoverKPs(Array.from(leftoverKPs));
     }
   };
 
@@ -385,6 +394,14 @@ export default function WrongQuestions() {
         mastered: masteredCount,
         knowledgePoints: Array.from(kps).sort(),
       });
+
+      const remainingMastered = wrongQuestions.filter(wq => !wq.mastered);
+      const leftoverKPs = new Set<string>();
+      remainingMastered.forEach(wq => {
+        const q = questions.find(q => q.id === wq.questionId);
+        if (q) leftoverKPs.add(q.knowledgePoint);
+      });
+      saveReviewLeftoverKPs(Array.from(leftoverKPs));
     }
   };
 

@@ -2,7 +2,7 @@ import { useState, useMemo } from 'react';
 import { useExamStore } from '@/store/examStore';
 import { cn } from '@/lib/utils';
 import * as storage from '@/data/storage';
-import type { User } from '@/types';
+import type { User, ExamResult } from '@/types';
 import {
   BarChart,
   Bar,
@@ -49,6 +49,10 @@ interface ReviewPeriod {
   knowledgePoints: string[];
   startDate: string;
   endDate: string;
+  examAvgScore: number;
+  examBestScore: number;
+  examWorstScore: number;
+  examList: ExamResult[];
 }
 
 function getWeekLabel(date: Date): string {
@@ -95,12 +99,15 @@ export default function Scores() {
   const courses = useExamStore((s) => s.courses);
   const chapters = useExamStore((s) => s.chapters);
   const getExamSessions = useExamStore((s) => s.getExamSessions);
+  const getTeacherReminderNote = useExamStore((s) => s.getTeacherReminderNote);
+  const saveTeacherReminderNote = useExamStore((s) => s.saveTeacherReminderNote);
 
   const [annTitle, setAnnTitle] = useState('');
   const [annContent, setAnnContent] = useState('');
   const [expandedStudentId, setExpandedStudentId] = useState<string | null>(null);
   const [reviewMode, setReviewMode] = useState<'week' | 'month'>('week');
   const [expandedPeriod, setExpandedPeriod] = useState<string | null>(null);
+  const [reminderNotes, setReminderNotes] = useState<Record<string, string>>({});
 
   const { total, correct } = getPracticeRecordsCount();
   const correctRate = total > 0 ? Math.round((correct / total) * 100) : 0;
@@ -135,13 +142,13 @@ export default function Scores() {
 
     const getLabel = reviewMode === 'week' ? getWeekLabel : getMonthLabel;
 
-    const groups = new Map<string, { practiceCount: number; correctCount: number; wrongCount: number; examCount: number; knowledgePoints: Set<string>; startDate: string; endDate: string; }>();
+    const groups = new Map<string, { practiceCount: number; correctCount: number; wrongCount: number; examCount: number; knowledgePoints: Set<string>; startDate: string; endDate: string; examScores: number[]; examList: ExamResult[]; }>();
 
     for (const record of records) {
       const date = new Date(record.createdAt);
       const label = getLabel(date);
       if (!groups.has(label)) {
-        groups.set(label, { practiceCount: 0, correctCount: 0, wrongCount: 0, examCount: 0, knowledgePoints: new Set(), startDate: record.createdAt, endDate: record.createdAt });
+        groups.set(label, { practiceCount: 0, correctCount: 0, wrongCount: 0, examCount: 0, knowledgePoints: new Set(), startDate: record.createdAt, endDate: record.createdAt, examScores: [], examList: [] });
       }
       const g = groups.get(label)!;
       g.practiceCount++;
@@ -162,16 +169,20 @@ export default function Scores() {
       const date = new Date(exam.createdAt);
       const label = getLabel(date);
       if (!groups.has(label)) {
-        groups.set(label, { practiceCount: 0, correctCount: 0, wrongCount: 0, examCount: 0, knowledgePoints: new Set(), startDate: exam.createdAt, endDate: exam.createdAt });
+        groups.set(label, { practiceCount: 0, correctCount: 0, wrongCount: 0, examCount: 0, knowledgePoints: new Set(), startDate: exam.createdAt, endDate: exam.createdAt, examScores: [], examList: [] });
       }
       const g = groups.get(label)!;
       g.examCount++;
+      g.examScores.push(exam.score);
+      g.examList.push(exam);
       if (exam.createdAt < g.startDate) g.startDate = exam.createdAt;
       if (exam.createdAt > g.endDate) g.endDate = exam.createdAt;
     }
 
     const result: ReviewPeriod[] = [];
     for (const [label, g] of groups) {
+      const scores = g.examScores;
+      const hasExams = scores.length > 0;
       result.push({
         label,
         practiceCount: g.practiceCount,
@@ -182,6 +193,10 @@ export default function Scores() {
         knowledgePoints: Array.from(g.knowledgePoints),
         startDate: g.startDate,
         endDate: g.endDate,
+        examAvgScore: hasExams ? Math.round(scores.reduce((a, b) => a + b, 0) / scores.length) : 0,
+        examBestScore: hasExams ? Math.max(...scores) : 0,
+        examWorstScore: hasExams ? Math.min(...scores) : 0,
+        examList: g.examList,
       });
     }
 
@@ -195,6 +210,8 @@ export default function Scores() {
       rate: p.rate,
       practiceCount: p.practiceCount,
       wrongCount: p.wrongCount,
+      examAvgScore: p.examAvgScore,
+      examCount: p.examCount,
     }));
   }, [reviewData]);
 
@@ -455,6 +472,8 @@ export default function Scores() {
                 <Line yAxisId="left" type="monotone" dataKey="rate" stroke="#4caf7d" strokeWidth={2} name="正确率(%)" dot={{ r: 4 }} />
                 <Line yAxisId="right" type="monotone" dataKey="practiceCount" stroke="#1e3a5f" strokeWidth={2} name="做题数" dot={{ r: 4 }} />
                 <Line yAxisId="right" type="monotone" dataKey="wrongCount" stroke="#e07b5a" strokeWidth={2} name="错题数" dot={{ r: 4 }} />
+                <Line yAxisId="left" type="monotone" dataKey="examAvgScore" stroke="#c9a96e" strokeWidth={2} name="模考均分" dot={{ r: 4 }} />
+                <Line yAxisId="right" type="monotone" dataKey="examCount" stroke="#7c3aed" strokeWidth={1.5} name="考试次数" dot={{ r: 3 }} strokeDasharray="5 5" />
               </ComposedChart>
             </ResponsiveContainer>
 
@@ -467,7 +486,7 @@ export default function Scores() {
                   >
                     <span className="text-sm font-medium text-surface-ink">{period.label}</span>
                     <span className="text-xs text-surface-ink-light">
-                      练习{period.practiceCount}题 | 正确率{period.rate}% | 错题{period.wrongCount}
+                      练习{period.practiceCount}题 | 正确率{period.rate}% | 错题{period.wrongCount} | 模考{period.examCount}次 | 均分{period.examAvgScore}
                     </span>
                   </div>
                   {expandedPeriod === period.label && (
@@ -478,6 +497,40 @@ export default function Scores() {
                           <span key={kp} className="badge-primary">{kp}</span>
                         ))}
                       </div>
+                      {period.examList && period.examList.length > 0 && (
+                        <div className="mt-3">
+                          <p className="text-sm font-medium mb-2">模考记录：</p>
+                          <table className="w-full text-sm">
+                            <thead>
+                              <tr className="bg-primary-50 rounded-lg">
+                                <th className="text-left p-2 font-medium text-surface-ink">考试名称</th>
+                                <th className="text-center p-2 font-medium text-surface-ink">得分</th>
+                                <th className="text-center p-2 font-medium text-surface-ink">正确率</th>
+                                <th className="text-center p-2 font-medium text-surface-ink">日期</th>
+                              </tr>
+                            </thead>
+                            <tbody>
+                              {period.examList.map((exam, ei) => (
+                                <tr key={exam.id} className="border-b border-surface-border last:border-0">
+                                  <td className="p-2 font-medium">模拟考试 #{ei + 1}</td>
+                                  <td className="p-2 text-center font-mono font-bold text-primary-500">{exam.score}</td>
+                                  <td className="p-2 text-center">
+                                    <span className={cn(
+                                      'font-mono',
+                                      exam.totalQuestions > 0 && (exam.correctCount / exam.totalQuestions * 100) >= 80 ? 'text-accent-success'
+                                        : exam.totalQuestions > 0 && (exam.correctCount / exam.totalQuestions * 100) >= 60 ? 'text-accent-gold'
+                                        : 'text-accent-coral',
+                                    )}>
+                                      {exam.totalQuestions > 0 ? Math.round((exam.correctCount / exam.totalQuestions) * 100) : 0}%
+                                    </span>
+                                  </td>
+                                  <td className="p-2 text-center text-surface-ink-light">{formatExamDate(exam.createdAt)}</td>
+                                </tr>
+                              ))}
+                            </tbody>
+                          </table>
+                        </div>
+                      )}
                     </div>
                   )}
                 </div>
@@ -775,7 +828,8 @@ export default function Scores() {
                                       ? Math.round((lastWeekRecords.filter(r => r.isCorrect).length / lastWeekRecords.length) * 100)
                                       : null;
 
-                                    const thisWeekWrong = storage.getWrongQuestions(s.id).length;
+                                    const thisWeekWrong = thisWeekRecords.filter(r => !r.isCorrect).length;
+                                    const lastWeekWrong = lastWeekRecords.filter(r => !r.isCorrect).length;
 
                                     const thisWeekCheckIns = filterByRange(detail.checkIns, thisWeekStart, thisWeekEnd);
                                     const lastWeekCheckIns = filterByRange(detail.checkIns, lastWeekStart, lastWeekEnd);
@@ -820,25 +874,71 @@ export default function Scores() {
                                             {lastWeekProgress > 0 && (
                                               <span className="text-sm text-surface-ink-light">{lastWeekProgress}章</span>
                                             )}
+                                            {lastWeekProgress > 0 && (
+                                              <span className="text-xs">
+                                                {thisWeekProgress > lastWeekProgress ? '↑' : thisWeekProgress < lastWeekProgress ? '↓' : '→'}
+                                              </span>
+                                            )}
                                             <span className="font-mono font-bold text-primary-500">{thisWeekProgress}章</span>
                                           </div>
                                         </div>
                                         <div className="flex justify-between items-center">
                                           <span className="text-sm text-surface-ink-light">当前错题</span>
-                                          <span className="font-mono font-bold text-accent-coral">{thisWeekWrong}题</span>
+                                          <div className="flex items-center gap-2">
+                                            {lastWeekWrong > 0 && (
+                                              <span className="text-sm text-surface-ink-light">{lastWeekWrong}题</span>
+                                            )}
+                                            {lastWeekWrong > 0 && thisWeekWrong > 0 && (
+                                              <span className="text-xs">
+                                                {thisWeekWrong > lastWeekWrong ? '↑' : thisWeekWrong < lastWeekWrong ? '↓' : '→'}
+                                              </span>
+                                            )}
+                                            <span className="font-mono font-bold text-accent-coral">{thisWeekWrong}题</span>
+                                          </div>
                                         </div>
                                         <div className="flex justify-between items-center">
                                           <span className="text-sm text-surface-ink-light">本周打卡</span>
-                                          <span className={cn(
-                                            'font-mono font-bold',
-                                            thisWeekCheckIns.length >= 3 ? 'text-accent-success' : 'text-accent-gold',
-                                          )}>
-                                            {thisWeekCheckIns.length}天
-                                          </span>
+                                          <div className="flex items-center gap-2">
+                                            {lastWeekCheckIns.length > 0 && (
+                                              <span className="text-sm text-surface-ink-light">{lastWeekCheckIns.length}天</span>
+                                            )}
+                                            {lastWeekCheckIns.length > 0 && thisWeekCheckIns.length > 0 && (
+                                              <span className="text-xs">
+                                                {thisWeekCheckIns.length > lastWeekCheckIns.length ? '↑' : thisWeekCheckIns.length < lastWeekCheckIns.length ? '↓' : '→'}
+                                              </span>
+                                            )}
+                                            <span className={cn(
+                                              'font-mono font-bold',
+                                              thisWeekCheckIns.length >= 3 ? 'text-accent-success' : 'text-accent-gold',
+                                            )}>
+                                              {thisWeekCheckIns.length}天
+                                            </span>
+                                          </div>
                                         </div>
                                       </div>
                                     );
                                   })()}
+                                </div>
+                                <div className="card mt-4">
+                                  <h4 className="font-serif font-semibold text-primary-500 mb-3">跟进备注</h4>
+                                  <textarea
+                                    className="input-field min-h-[100px] resize-none w-full text-sm"
+                                    rows={4}
+                                    value={reminderNotes[s.id] ?? getTeacherReminderNote(s.id)}
+                                    onChange={(e) => setReminderNotes({ ...reminderNotes, [s.id]: e.target.value })}
+                                    placeholder="写下对这个学员的跟进提醒..."
+                                  />
+                                  <div className="mt-3 flex justify-end">
+                                    <button
+                                      className="btn-primary px-4 py-2 text-sm"
+                                      onClick={() => {
+                                        const note = reminderNotes[s.id] ?? getTeacherReminderNote(s.id);
+                                        saveTeacherReminderNote(s.id, note);
+                                      }}
+                                    >
+                                      保存备注
+                                    </button>
+                                  </div>
                                 </div>
                               </div>
                             )}

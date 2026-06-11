@@ -63,10 +63,13 @@ interface ExamStore {
   generateDailyTasks: () => DailyTask[];
   generateWeeklyTasks: () => void;
   ensureDailyTasksGenerated: () => void;
-  toggleTaskCompleted: (taskId: string) => void;
+  toggleTaskCompleted: (taskId: string, dateStr?: string) => void;
   saveDailyCheckIn: () => void;
   hasCheckedInToday: () => boolean;
   getContinuousCheckInDays: () => number;
+  saveReviewLeftoverKPs: (knowledgePoints: string[]) => void;
+  getTeacherReminderNote: (studentId: string) => string;
+  saveTeacherReminderNote: (studentId: string, note: string) => void;
 
   addAnnouncement: (title: string, content: string) => void;
   getAnnouncements: () => Announcement[];
@@ -709,6 +712,32 @@ export const useExamStore = create<ExamStore>((set, get) => ({
         }
       });
 
+      if (day === 6) {
+        const leftoverKPs = storage.getReviewLeftoverKPs(currentUser.id);
+        leftoverKPs.forEach(kp => {
+          if (tasks.length >= adjustedCount) return;
+          const relatedQ = get().questions.find(q => q.knowledgePoint === kp);
+          if (relatedQ) {
+            const ch = get().chapters.find(c => c.id === relatedQ.chapterId);
+            if (ch && !tasks.some(t => t.chapterId === ch.id && t.source === '错题复习')) {
+              tasks.push({
+                id: `task-${taskId++}`,
+                chapterId: ch.id,
+                chapterTitle: ch.title,
+                courseTitle: courses.find(c => c.id === ch.courseId)?.title || '',
+                type: 'exercise',
+                completed: false,
+                urgency: 'high',
+                source: '错题复习',
+              });
+            }
+          }
+        });
+        if (leftoverKPs.length > 0) {
+          storage.clearReviewLeftoverKPs(currentUser.id);
+        }
+      }
+
       tasks.sort((a, b) => {
         const order = { high: 0, medium: 1, low: 2 } as Record<string, number>;
         return order[a.urgency] - order[b.urgency];
@@ -721,26 +750,31 @@ export const useExamStore = create<ExamStore>((set, get) => ({
     set({ weeklyTasks: allTasks });
   },
 
-  toggleTaskCompleted: (taskId: string) => {
+  toggleTaskCompleted: (taskId: string, dateStr?: string) => {
     const { dailyTasks, currentUser, weeklyTasks } = get();
-    const newTasks = dailyTasks.map(task =>
+    const targetDate = dateStr || new Date().toISOString().split('T')[0];
+    const targetTasks = weeklyTasks[targetDate] || dailyTasks;
+    const newTasks = targetTasks.map(task =>
       task.id === taskId ? { ...task, completed: !task.completed } : task
     );
-    set({ dailyTasks: newTasks });
+    const newWeekly = { ...weeklyTasks, [targetDate]: newTasks };
+    set({ weeklyTasks: newWeekly });
+    if (targetDate === new Date().toISOString().split('T')[0]) {
+      set({ dailyTasks: newTasks });
+    }
     if (currentUser) {
-      const today = new Date().toISOString().split('T')[0];
-      storage.saveDailyTasks(currentUser.id, today, newTasks);
-      set({ weeklyTasks: { ...weeklyTasks, [today]: newTasks } });
+      storage.saveDailyTasks(currentUser.id, targetDate, newTasks);
     }
   },
 
   saveDailyCheckIn: () => {
-    const { currentUser, dailyTasks } = get();
+    const { currentUser, weeklyTasks } = get();
     if (!currentUser) return;
 
     const today = new Date().toISOString().split('T')[0];
-    const completed = dailyTasks.filter(t => t.completed).length;
-    const total = dailyTasks.length;
+    const todayTasks = weeklyTasks[today] || [];
+    const completed = todayTasks.filter(t => t.completed).length;
+    const total = todayTasks.length;
 
     const checkIn: CheckIn = {
       id: `checkin-${currentUser.id}-${today}`,
@@ -782,6 +816,25 @@ export const useExamStore = create<ExamStore>((set, get) => ({
       }
     }
     return count;
+  },
+
+  saveReviewLeftoverKPs: (knowledgePoints: string[]) => {
+    const { currentUser } = get();
+    if (!currentUser) return;
+    storage.saveReviewLeftoverKPs(currentUser.id, knowledgePoints);
+  },
+
+  getTeacherReminderNote: (studentId: string) => {
+    const { currentUser } = get();
+    if (!currentUser || currentUser.role !== 'teacher') return '';
+    const all = storage.getTeacherReminderNotes();
+    return (all[currentUser.id] && all[currentUser.id][studentId]) || '';
+  },
+
+  saveTeacherReminderNote: (studentId: string, note: string) => {
+    const { currentUser } = get();
+    if (!currentUser || currentUser.role !== 'teacher') return;
+    storage.saveTeacherReminderNote(currentUser.id, studentId, note);
   },
 
   addAnnouncement: (title: string, content: string) => {

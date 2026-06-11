@@ -10,6 +10,7 @@ import {
   Edit3,
   AlertTriangle,
   CheckCheck,
+  RotateCw,
 } from 'lucide-react';
 
 function getDaysUntil(targetDate: string): number {
@@ -278,7 +279,7 @@ export default function StudyPlan() {
                   <input
                     type="checkbox"
                     checked={task.completed}
-                    onChange={() => toggleTaskCompleted(task.id)}
+                    onChange={() => toggleTaskCompleted(task.id, selectedDay)}
                     className="w-5 h-5 rounded border-surface-border text-accent-success focus:ring-accent-success cursor-pointer accent-accent-success"
                   />
                   <div className={cn('flex-1 min-w-0', task.completed && 'line-through text-surface-ink-light')}>
@@ -288,6 +289,12 @@ export default function StudyPlan() {
                   <span className={cn(typeBadge[task.type] || 'badge-primary')}>
                     {typeLabel[task.type] || task.type}
                   </span>
+                  {task.source === '错题复习' && (
+                    <span className="badge-primary text-xs flex items-center gap-1">
+                      <RotateCw className="w-3 h-3" />
+                      来自错题复习
+                    </span>
+                  )}
                   {task.completed && (
                     <CheckCircle2 className="w-5 h-5 text-accent-success shrink-0 animate-check" />
                   )}
